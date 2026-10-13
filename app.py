@@ -1,4 +1,4 @@
-"""Shadowboard server. It only fetches YouTube videos; reading the board happens in the
+"""Watch Chess in 3D server. It only fetches YouTube videos; reading the board happens in the
 browser (static/engine.js), so the server needs next to no CPU.
 
 POST /api/videos           {"url": "<youtube link>"}  -> {"video_id", status...}; starts the download
@@ -26,7 +26,7 @@ MAX_RESULTS_MB = 8
 os.makedirs(os.path.join(DATA, 'videos'), exist_ok=True)
 os.makedirs(os.path.join(DATA, 'results'), exist_ok=True)
 
-app = FastAPI(title='Shadowboard')
+app = FastAPI(title='Watch Chess in 3D')
 videos = {}  # video id -> {'status', 'download', 'error'}
 lock = threading.Lock()
 worker = ThreadPoolExecutor(max_workers=int(os.environ.get('SHADOWBOARD_WORKERS', 2)))

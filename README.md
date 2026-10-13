@@ -1,4 +1,4 @@
-# Shadowboard (server version)
+# Watch Chess in 3D (server version)
 
 Paste a YouTube link (or open a video file) and watch it with a 3D board that follows the game.
 Works on phones: no screen sharing. The server only downloads the video; your browser finds
