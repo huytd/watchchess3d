@@ -205,16 +205,44 @@ export function changedTiles(tiles, ref){
   return out;
 }
 
-/* cells: 64x13 probabilities, top-left first. +1 if White looks to be at the bottom. */
+/* cells: 64x13 probabilities, top-left first. +1 if White looks to be at the bottom, -1 if
+   at the top, 0 if unclear. Pawns can't pass each other on a file, so on a file with pawns of
+   both colours White's are below Black's when White is at the bottom: each such file counts
+   twice. Where the pieces stand on average breaks a tie. */
 export function orientationVote(cells){
-  let wn = 0, ws = 0, bn = 0, bs = 0;
+  let wn = 0, ws = 0, bn = 0, bs = 0, pawns = 0;
+  const lowP = new Array(8).fill(-1), highP = new Array(8).fill(8), lowp = new Array(8).fill(-1), highp = new Array(8).fill(8);
   for (let i = 0; i < 64; i++){
-    const k = argmax(cells, i * 13, 13), conf = cells[i * 13 + k], row = i >> 3;
+    const k = argmax(cells, i * 13, 13), conf = cells[i * 13 + k], row = i >> 3, col = i & 7;
     if (conf <= 0.7 || k === 0) continue;
     if (k <= 6){ wn++; ws += row; } else { bn++; bs += row; }
+    if (k === 1){ lowP[col] = Math.max(lowP[col], row); highP[col] = Math.min(highP[col], row); }
+    if (k === 7){ lowp[col] = Math.max(lowp[col], row); highp[col] = Math.min(highp[col], row); }
   }
-  if (wn < 3 || bn < 3) return 0;
-  return ws / wn > bs / bn ? 1 : -1;
+  for (let c = 0; c < 8; c++){
+    if (lowP[c] < 0 || lowp[c] < 0) continue;
+    if (highP[c] > lowp[c]) pawns++;       // every White pawn below every Black one
+    else if (lowP[c] < highp[c]) pawns--;  // every White pawn above
+  }
+  const spread = wn >= 3 && bn >= 3 ? Math.sign(ws / wn - bs / bn) : 0;
+  return Math.sign(2 * pawns + spread);
+}
+
+/* cells: 64x13, top-left first. true if they show the starting position (or one a few moves
+   into a game) with White at the bottom, false if with White at the top, null if neither.
+   It goes by colour only (a White piece, a Black piece or nothing on each square), which
+   reads more reliably than which piece it is: 16 of one colour on the top two rows and 16
+   of the other on the bottom two can't happen the wrong way up in a game. */
+const START_KINDS = 'b'.repeat(16) + '.'.repeat(32) + 'w'.repeat(16);
+export function startOrientation(cells){
+  let up = 0, down = 0;
+  for (let i = 0; i < 64; i++){
+    const o = i * 13, p = { '.': cells[o], w: 0, b: 0 };
+    for (let k = 1; k <= 6; k++){ p.w += cells[o + k]; p.b += cells[o + 6 + k]; }
+    up += p[START_KINDS[i]];
+    down += p[START_KINDS[63 - i]];  // Black at the bottom: the board turned round
+  }
+  return up >= 48 && up - down >= 16 ? true : down >= 48 && down - up >= 16 ? false : null;
 }
 
 const cellSquare = (i, whiteBottom) => {
@@ -749,10 +777,19 @@ export class MarkTracker {
 /* Reads a stream of 256x256 RGB board crops. predict(tiles, n) -> Promise of n x 13
    probabilities. Only squares that changed since they were last read go through the CNN,
    and the marks are only looked for again when something on the board changed. Each is
-   compared with what it was last read from, so a slow fade still gets noticed. */
+   compared with what it was last read from, so a slow fade still gets noticed.
+
+   Which way up the board is can change during a video: chess.com and Lichess put the player's
+   colour at the bottom, so a streamer playing several games shows some from White's side and
+   some from Black's. Each game starts from the starting position, and that settles it: once
+   it has been seen for two readings in a row, the board is read that way up until a game
+   starts the other way round. Before the first one (a video that joins a game in progress),
+   the guess from the whole video is used, and changed if the game being read keeps saying
+   otherwise. fixed: the viewer chose the orientation, so it never changes. Every position
+   comes with wb, which way up the board was when it was read. */
 export class Reader {
-  constructor(predict, { whiteBottom = true, decided = false, fps = FPS } = {}){
-    Object.assign(this, { predict, whiteBottom, decided, votes: 0 });
+  constructor(predict, { whiteBottom = true, decided = false, fixed = false, fps = FPS } = {}){
+    Object.assign(this, { predict, whiteBottom, decided, fixed, votes: 0, anchored: fixed, startSeen: null, startRun: 0 });
     this.follower = new Follower();
     this.tracker = new MarkTracker(fps);
     this.ref = this.probs = this.markRef = this.found = null;
@@ -777,10 +814,7 @@ export class Reader {
         todo.forEach((k, i) => this.probs.set(p.subarray(i * 13, i * 13 + 13), k * 13));
       }
     }
-    if (!this.decided){
-      this.votes += orientationVote(this.probs);
-      if (Math.abs(this.votes) >= 3){ this.whiteBottom = this.votes > 0; this.decided = true; }
-    }
+    if (!this.fixed) this.orient();
     if (this.decided){  // until then, wait to know which way up the board is
       this.follower.feed(t, cellsToSquares(this.probs, this.whiteBottom));
       if (!this.markRef || changedTiles(tiles, this.markRef).length){
@@ -789,9 +823,35 @@ export class Reader {
       }
       this.tracker.feed(t, marksToSquares(this.found, this.whiteBottom));
     }
-    const events = this.follower.events.slice(this.sent), marks = this.tracker.events.slice(this.sentMarks);
+    const wb = this.whiteBottom;
+    const events = this.follower.events.slice(this.sent).map(e => ({ ...e, wb })), marks = this.tracker.events.slice(this.sentMarks);
     this.sent = this.follower.events.length; this.sentMarks = this.tracker.events.length;
     return { events, marks, whiteBottom: this.whiteBottom, decided: this.decided };
+  }
+
+  orient(){
+    const start = startOrientation(this.probs);
+    this.startRun = start !== null && start === this.startSeen ? this.startRun + 1 : 1;
+    this.startSeen = start;
+    if (start !== null && this.startRun >= 2){
+      this.anchored = true;
+      this.votes = 0;
+      this.turn(start);
+      return;
+    }
+    if (this.anchored) return;
+    // no game start seen yet: go by the pieces, and overrule the whole video's guess only
+    // when this game keeps disagreeing with it
+    this.votes += orientationVote(this.probs);
+    const need = this.decided ? 8 : 3;
+    if (Math.abs(this.votes) >= need){ this.turn(this.votes > 0); this.votes = 0; }
+  }
+
+  turn(whiteBottom){
+    if (this.decided && whiteBottom === this.whiteBottom) return;
+    // the squares now map the other way round: forget the smoothing over the old mapping
+    if (this.decided){ this.follower.sm = null; this.follower.pend.fill(null); }
+    this.whiteBottom = whiteBottom; this.decided = true;
   }
 }
 

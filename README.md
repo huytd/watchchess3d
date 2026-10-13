@@ -48,10 +48,30 @@ you open never leave your device.
   centres, so it tests every possible arrow (plus chess.com's L-shaped knight arrows) against a
   mask of strongly coloured pixels. A mark must hold for two readings to show and be gone for two
   to disappear. This is a line-by-line port of the Python pipeline the server used to run, and
-  gives the same moves and marks on the same frames.
+  gives the same moves and marks on the same frames, apart from deciding which way up the board
+  is (below), which the Python version did once for the whole video.
+- Which way up the board is: chess.com and Lichess put the player's colour at the bottom, so a
+  video with several games can show some from White's side and some from Black's. The reader
+  settles it per game from the starting position (two readings in a row with 16 pieces of one
+  colour on the top two rows and 16 of the other on the bottom two), and reads the board that way
+  up until a game starts the other way round. Before the first game start (a video that joins a
+  game in progress), it goes by the pawns, which can't pass each other on a file, and by where
+  the pieces stand. Every position records which way up it was read, and the 3D board turns to
+  match as playback reaches each game. Readings saved before this (no `version: 2`) are read again.
 - `static/cnn.js`: the square classifier (`static/model.json`), run with TensorFlow.js on the
   GPU (WebGL) or with WebAssembly, whichever is faster on the device.
 - `static/index.html`: the page (3D board + YouTube's embedded player).
+- `static/pieces.glb`: the chess pieces, from Poly Haven's [Chess Set](https://polyhaven.com/a/chess_set)
+  by Riley Queen (CC0), cut down to one mesh per piece type and 512px textures (690 KB) by
+  `tools/make_pieces.py`. Simple built-in pieces show until it has loaded. Both sides share one
+  light colour map that the page tints, so the colours of the pieces and the board can be changed
+  under Settings › Board colours / Piece colours (presets or any colour; remembered in the browser).
+  Ticking Wood turns the chosen colours into wood of that tone: the board lays a neutral grain
+  (`static/wood.jpg`, from Poly Haven's [Cherry Veneer](https://polyhaven.com/a/cherry_veneer), CC0)
+  over each square, and the pieces get turned-wood grain drawn in the shader.
+- `static/table/`: what the board stands on (Settings › Table: walnut by default, oak planks, leather,
+  green baize, linen, or none), from Poly Haven's CC0 Wood Table 001, Wood Table, Brown Leather,
+  Velour Velvet and Rough Linen. The table fades into a dim room with fog, under a soft vignette.
 
 Speed depends on the device. Without a GPU (WebAssembly on 4 CPU cores) a 71-second test video
 took about 15 seconds, so roughly 2.5 minutes for 20 minutes of video; you can watch from the
@@ -71,15 +91,15 @@ start while it works. The server itself stays under 100 MB of memory and uses al
 - **YouTube's terms of service don't allow downloading videos** outside YouTube's own apps.
   Running this for yourself is a personal-use gray area; don't run it as a public service.
   Opening your own recordings avoids the issue.
-- The page loads TensorFlow.js from a CDN (jsDelivr) the first time, so the browser needs to reach it.
+- The page loads TensorFlow.js and three.js from CDNs (jsDelivr, cdnjs) the first time, so the browser needs to reach them.
 - A video is downloaded to the server and then once more by each browser that reads it (480p,
   video only: a few MB per minute).
 - **YouTube often blocks downloads from cloud servers** ("Sign in to confirm you're not a bot").
   It usually works from a home connection. On a VPS, export your browser's YouTube cookies to
   a cookies.txt and set `YTDLP_COOKIES`, and keep yt-dlp up to date.
-- If the board isn't found, or the wrong area is used, press **Fix board area** and draw it.
+- If the board isn't found, or the wrong area is used, open Settings (the gear above the video) › **Draw the board area yourself**.
 - Only flat 2D digital boards are recognized (Lichess/chess.com style), not filmed physical boards.
 - Arrows come in four colours (green, red, blue, orange). Faint ones (a pale arrow on a board of
   a similar colour, thin Lichess circles in a low-quality video) can be missed. Turn them off
-  under ⋯ › Show arrows from the video.
+  under Settings › Show arrows from the video.
 - Downloaded videos stay in the data folder until you delete them.

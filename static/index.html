@@ -41,6 +41,9 @@ img,video,canvas{max-width:none}
 
 /* the board fills the page */
 .scene{position:fixed; inset:0; background:var(--bg)}
+/* with a table, a soft vignette makes it feel lit by a lamp over the board */
+.scene.table::after{content:""; position:absolute; inset:0; pointer-events:none;
+  background:radial-gradient(ellipse 75% 70% at 50% 45%, transparent 45%, rgba(0,0,0,0.38) 100%)}
 .scene canvas{display:block; width:100%; height:100%; touch-action:none; cursor:grab}
 .scene canvas:active{cursor:grabbing}
 
@@ -49,14 +52,13 @@ img,video,canvas{max-width:none}
   position:fixed; z-index:2;
   left:calc(20px + env(safe-area-inset-left,0px)); bottom:calc(20px + env(safe-area-inset-bottom,0px));
   width:clamp(300px, 30vw, 620px);
-  background:var(--panel); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow);
+  background:var(--stage); border-radius:16px; box-shadow:var(--shadow);
   display:flex; flex-direction:column; transition:width .25s ease;
 }
 .card.expanded{width:min(62vw, 1100px)}
 .card.cropped{width:clamp(360px, 24vw, 460px)}
 .stage{
-  position:relative; aspect-ratio:16/9; background:var(--stage); overflow:hidden;
-  border-radius:15px 15px 0 0;
+  position:relative; aspect-ratio:16/9; background:var(--stage); overflow:hidden; border-radius:16px;
 }
 .card.cropped .stage{aspect-ratio:var(--ar, 1)}
 .stage video{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000}
@@ -87,38 +89,99 @@ img,video,canvas{max-width:none}
 .btn.icon{padding:7px 10px; font-size:15px; line-height:1}
 #trackBtn.on{background:transparent; color:var(--ink); border-color:var(--accent)}
 #trackBtn.on::before{content:""; width:8px; height:8px; border-radius:50%; background:var(--accent)}
-.bar{display:flex; align-items:center; gap:6px; padding:8px 8px 4px; min-width:0; flex-wrap:wrap}
-.bar .spacer{flex:1}
-.hint{margin:0; padding:0 14px 9px; color:var(--muted); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.hint.warn{color:var(--danger)}
 
-/* the ⋯ menu */
+/* controls above the video, clear of YouTube's own: crop (top left), status, settings (top right) */
+.tools{
+  position:absolute; z-index:2; left:0; right:0; bottom:calc(100% + 8px);
+  --tool:36px; display:grid; grid-template-columns:var(--tool) 1fr var(--tool); align-items:end; gap:8px; pointer-events:none;
+}
+.tools > .tool, .status button{pointer-events:auto}
+.tool{
+  flex:none; width:var(--tool); height:var(--tool); display:grid; place-items:center; padding:0; margin:0;
+  border:0; border-radius:50%; cursor:pointer; color:#fff;
+  background:rgba(12,16,14,0.6); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+  transition:background .15s ease;
+}
+
+.tool svg{width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round}
+.tool:hover{background:rgba(12,16,14,0.8)}
+.tool[aria-pressed="true"], .tool[aria-expanded="true"]{background:var(--accent); color:var(--accent-ink)}
+.tools #cropBtn{grid-column:1}
+.tools .status{grid-column:2; justify-self:center}
+.tools .settings{grid-column:3}
+.status{
+  margin:0; min-width:0; max-width:100%; padding:6px 12px; border-radius:14px;
+  color:var(--stage-ink); font-size:12.5px; line-height:1.35; text-align:center;
+  background:rgba(12,16,14,0.6); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  transition:opacity .4s ease;
+}
+.status:empty{display:none}
+.status.warn{color:#f6b3a2}
+.status.quiet{opacity:0; pointer-events:none}
+.status button{font:inherit; font-weight:600; color:var(--accent); background:none; border:0; padding:0 0 0 6px; cursor:pointer}
+
+/* settings: a popover above the video card, a bottom sheet on phones */
+.menu-backdrop{display:none}
 .menu{
-  position:absolute; right:8px; bottom:72px; z-index:3;
-  width:250px; max-height:min(70vh, 520px); overflow:auto;
-  background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);
+  position:absolute; right:0; bottom:calc(100% + 56px); z-index:4;
+  width:270px; max-height:min(70vh, 560px); overflow:auto; overscroll-behavior:contain;
+  background:var(--panel); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow);
   padding:6px; display:flex; flex-direction:column;
 }
+.menu .sheet-head{display:none}
 .menu button, .menu a{
   font:inherit; text-align:left; background:none; border:0; color:var(--ink); padding:8px 10px;
   border-radius:8px; cursor:pointer; text-decoration:none;
 }
-.menu button:hover, .menu a:hover{background:color-mix(in srgb, var(--ink) 7%, transparent)}
+.menu button:hover:not(:disabled), .menu a:hover{background:color-mix(in srgb, var(--ink) 7%, transparent)}
+.menu button:disabled{opacity:.4; cursor:default}
 .menu button[aria-pressed="true"]::after{content:" \2713"; color:var(--accent)}
 .menu label{display:flex; flex-direction:column; gap:4px; padding:6px 10px; color:var(--muted); font-size:12.5px}
 .menu select{font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 8px}
 .menu hr{border:0; border-top:1px solid var(--line); margin:4px 6px}
+.menu .swatches{display:flex; gap:6px; padding:0 10px 6px}
+.menu .swatches label{flex:1; flex-direction:row; align-items:center; gap:6px; padding:0; color:var(--ink); font-size:13px}
+.menu input[type="checkbox"]{margin:0; accent-color:var(--accent)}
+.menu input[type="color"]{width:30px; height:26px; padding:2px; border:1px solid var(--line); border-radius:6px; background:var(--bg); cursor:pointer}
 
 @media (max-width:700px){
-  .card, .card.cropped, .card.expanded{left:10px; right:10px; width:auto}
-  .card.cropped{width:min(86vw, 340px); right:auto}
+  .card, .card.cropped, .card.expanded{
+    left:calc(8px + env(safe-area-inset-left,0px)); right:calc(8px + env(safe-area-inset-right,0px));
+    bottom:calc(8px + env(safe-area-inset-bottom,0px)); width:auto;
+  }
+  .card.cropped{width:min(72vw, 300px); right:auto}
+  .tools{--tool:40px}
+  /* 16px stops iOS zooming into a field when it gets focus */
+  .empty input, .menu select{font-size:16px}
+}
+/* settings as a bottom sheet on phones, upright or sideways */
+@media (max-width:700px), (max-height:500px){
+  .menu-backdrop{display:block; position:fixed; inset:0; z-index:3; background:rgba(0,0,0,0.4)}
+  .menu-backdrop[hidden]{display:none}
+  .menu{
+    position:fixed; left:0; right:0; bottom:0; width:auto; max-width:560px; margin:0 auto; max-height:min(80vh, 640px);
+    border-radius:18px 18px 0 0; border-width:1px 0 0; padding:4px 10px calc(14px + env(safe-area-inset-bottom,0px));
+  }
+  .menu .sheet-head{
+    display:flex; align-items:center; justify-content:space-between; position:sticky; top:-4px; z-index:1;
+    margin:0 -10px 4px; padding:10px 12px 8px 20px; background:var(--panel); border-bottom:1px solid var(--line);
+    font-weight:600; font-size:16px;
+  }
+  .menu .sheet-head button{font-size:22px; line-height:1; padding:4px 10px}
+  .menu button, .menu a{padding:12px 10px; font-size:15px}
+  .menu label{font-size:13px}
+  .menu .swatches label{font-size:14px}
+  .menu input[type="color"]{width:38px; height:32px}
+  .menu input[type="checkbox"]{width:20px; height:20px}
 }
 
 /* server version additions */
 .stage #yt, .stage iframe{position:absolute; inset:0; width:100%; height:100%; border:0}
 .card.cropped .stage #yt, .card.cropped .stage iframe, .card.cropped .stage video{inset:auto}
 .stage .still{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000}
-.progress{height:3px; background:transparent}
+.progress{position:absolute; left:0; right:0; top:0; z-index:2; height:3px; pointer-events:none; transition:opacity .6s ease}
+.progress.done{opacity:0}
 .progress span{display:block; height:100%; width:0; background:var(--accent); transition:width .4s ease}
 .empty form{display:flex; gap:8px; flex-wrap:wrap}
 .empty .or{display:flex; align-items:center; gap:8px; color:#aab5ac; font-size:13px}
@@ -129,6 +192,11 @@ img,video,canvas{max-width:none}
 <div class="scene" id="scene" aria-label="3D chess board. Drag to rotate, pinch or scroll to zoom."></div>
 
 <aside class="card" id="card" aria-label="Video">
+  <div class="tools" id="tools">
+    <button class="tool" id="cropBtn" aria-pressed="false" hidden title="Show only the board" aria-label="Show only the board"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
+    <p class="status" id="hint" role="status" aria-live="polite"></p>
+    <button class="tool settings" id="moreBtn" aria-expanded="false" aria-controls="menu" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+  </div>
   <div class="stage" id="stage">
     <div id="yt"></div>
     <video id="video" playsinline controls hidden></video>
@@ -143,16 +211,11 @@ img,video,canvas{max-width:none}
       <div class="or">or <button class="btn" id="fileBtn" type="button">upload a video file</button></div>
       <p class="err" id="emptyErr" hidden></p>
     </div>
+    <div class="progress" aria-hidden="true"><span id="progress"></span></div>
   </div>
-  <div class="progress" aria-hidden="true"><span id="progress"></span></div>
-  <div class="bar">
-    <button class="btn" id="cropBtn" aria-pressed="false" disabled title="Show only the board area of the video">Crop</button>
-    <button class="btn" id="fixBtn" aria-pressed="false" disabled title="Draw the board area yourself">Fix board area</button>
-    <span class="spacer"></span>
-    <button class="btn icon" id="moreBtn" aria-expanded="false" aria-controls="menu" aria-label="More options">&#8943;</button>
-  </div>
-  <p class="hint" id="hint" role="status" aria-live="polite">Paste a YouTube link to start.</p>
-  <div class="menu" id="menu" hidden>
+  <div class="menu-backdrop" id="menuBackdrop" hidden></div>
+  <div class="menu" id="menu" role="dialog" aria-label="Settings" hidden>
+    <div class="sheet-head">Settings <button id="menuClose" aria-label="Close settings">&times;</button></div>
     <button id="newBtn">Another video</button>
     <hr>
     <label>Orientation in the video
@@ -162,10 +225,32 @@ img,video,canvas{max-width:none}
         <option value="b">Black at bottom</option>
       </select>
     </label>
+    <button id="fixBtn" aria-pressed="false" disabled>Draw the board area yourself</button>
     <button id="autoBtn">Find the board again automatically</button>
     <hr>
     <button id="flipBtn">Flip board</button>
     <button id="marksBtn" aria-pressed="true">Show arrows from the video</button>
+    <hr>
+    <label>Board colours
+      <select id="boardTheme"></select>
+    </label>
+    <div class="swatches">
+      <label><input type="color" id="boardLight" aria-label="Light squares"> Light</label>
+      <label><input type="color" id="boardDark" aria-label="Dark squares"> Dark</label>
+      <label><input type="checkbox" id="boardWood"> Wood</label>
+    </div>
+    <label>Piece colours
+      <select id="pieceTheme"></select>
+    </label>
+    <div class="swatches">
+      <label><input type="color" id="pieceWhite" aria-label="White pieces"> White</label>
+      <label><input type="color" id="pieceBlack" aria-label="Black pieces"> Black</label>
+      <label><input type="checkbox" id="pieceWood"> Wood</label>
+    </div>
+    <label>Table
+      <select id="tableSel"></select>
+    </label>
+    <hr>
     <button id="copyBtn">Copy FEN</button>
     <a id="lichessBtn" target="_blank" rel="noopener" href="#">Analyze on Lichess</a>
   </div>
@@ -173,6 +258,7 @@ img,video,canvas{max-width:none}
 </aside>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script type="module">
 import { readVideo, warmUp, openVideo, closeVideo, seek } from './read.js';
 const $ = s => document.querySelector(s);
@@ -239,20 +325,53 @@ function canvasTex(size, draw){
   t.anisotropy = renderer.capabilities.getMaxAnisotropy();
   return t;
 }
-const boardTex = canvasTex(1024, (g, n) => {
-  const q = n / 8;
+/* the board's colours can be changed (Settings › Board colours), so its textures are redrawn on demand;
+   the frame is a deep shade of the dark squares. Wood lays a neutral grain (static/wood.jpg, from
+   Poly Haven's Cherry Veneer, CC0) over each colour with soft-light, so any tone becomes that wood. */
+const boardColours = { light: '#d9cdae', dark: '#56744f', wood: false };
+const frameColour = () => '#' + new THREE.Color(boardColours.dark).lerp(new THREE.Color(0x0c0f0d), 0.72).getHexString();
+const woodImg = new Image();
+let woodPattern = null;
+function woodReady(){
+  if (woodPattern) return true;
+  if (!woodImg.src){ woodImg.onload = () => paintBoard(boardColours.light, boardColours.dark, boardColours.wood); woodImg.src = 'wood.jpg'; }
+  if (!woodImg.complete || !woodImg.naturalWidth) return false;
+  woodPattern = document.createElement('canvas').getContext('2d').createPattern(woodImg, 'repeat');
+  return true;
+}
+/* grain over a rectangle, turned by rot and shifted by (ox, oy) so neighbouring pieces of wood differ */
+function grain(g, x, y, w, h, rot, ox, oy){
+  const k = 0.7, r = Math.hypot(w, h) / k;
+  g.save();
+  g.beginPath(); g.rect(x, y, w, h); g.clip();
+  g.translate(x + w / 2, y + h / 2); g.rotate(rot); g.scale(k, k); g.translate(ox, oy);
+  g.globalCompositeOperation = 'soft-light';
+  g.fillStyle = woodPattern; g.fillRect(-ox - r, -oy - r, 2 * r, 2 * r);
+  g.restore();
+}
+function drawBoard(g, n){
+  const q = n / 8, wood = boardColours.wood && woodReady();
+  let seed = 11;
+  const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647 * 512;
   for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++){
-    g.fillStyle = (r + f) % 2 === 0 ? '#d9cdae' : '#56744f';
+    g.fillStyle = (r + f) % 2 === 0 ? boardColours.light : boardColours.dark;
     g.fillRect(f * q, r * q, q, q);
+    if (wood) grain(g, f * q, r * q, q, q, 0, rnd(), rnd());
   }
+  if (wood) return;
   // faint vinyl grain
   const img = g.getImageData(0, 0, n, n), d = img.data;
   for (let i = 0; i < d.length; i += 4){ const k = (Math.random() - 0.5) * 7; d[i] += k; d[i + 1] += k; d[i + 2] += k; }
   g.putImageData(img, 0, 0);
-});
-const frameTex = canvasTex(1152, (g, n) => {
-  g.fillStyle = '#1f2a24'; g.fillRect(0, 0, n, n);
+}
+function drawFrame(g, n){
+  g.fillStyle = frameColour(); g.fillRect(0, 0, n, n);
   const u = n / 9.2, off = 0.6 * u;
+  if (boardColours.wood && woodReady()){
+    // grain runs along each side of the frame
+    grain(g, 0, 0, n, off, 0, 40, 0); grain(g, 0, n - off, n, off, 0, 300, 0);
+    grain(g, 0, off, off, n - 2 * off, Math.PI / 2, 150, 0); grain(g, n - off, off, off, n - 2 * off, Math.PI / 2, 420, 0);
+  }
   g.fillStyle = '#cfa95f';
   g.font = `600 ${u * 0.3}px "Instrument Sans", system-ui, sans-serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -264,14 +383,65 @@ const frameTex = canvasTex(1152, (g, n) => {
     g.fillText(String(i + 1), off / 2, y);
     g.save(); g.translate(n - off / 2, y); g.rotate(Math.PI); g.fillText(String(i + 1), 0, 0); g.restore();
   }
-});
-const frameSide = new THREE.MeshStandardMaterial({ color: 0x1b241f, roughness: 0.6 });
+}
+const boardTex = canvasTex(1024, drawBoard), frameTex = canvasTex(1152, drawFrame);
+const frameSide = new THREE.MeshStandardMaterial({ roughness: 0.6 });
+function paintBoard(light, dark, wood){
+  Object.assign(boardColours, { light, dark, wood });
+  for (const [tex, draw] of [[boardTex, drawBoard], [frameTex, drawFrame]]){
+    draw(tex.image.getContext('2d'), tex.image.width);
+    tex.needsUpdate = true;
+  }
+  frameSide.color.set(frameColour()).convertSRGBToLinear();
+  dirty = true;
+}
+frameSide.color.set(frameColour()).convertSRGBToLinear();
 const frame = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.42, 9.2), [
   frameSide, frameSide, new THREE.MeshStandardMaterial({ map: frameTex, roughness: 0.55 }), frameSide, frameSide, frameSide,
 ]);
 frame.position.y = -0.21; frame.receiveShadow = true; scene.add(frame);
 const top = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshStandardMaterial({ map: boardTex, roughness: 0.72 }));
 top.rotation.x = -Math.PI / 2; top.position.y = 0.002; top.receiveShadow = true; scene.add(top);
+
+/* the table the board stands on (Settings › Table), fading into a dim room with fog. Textures are from
+   Poly Haven (CC0): Wood Table 001, Wood Table, Brown Leather, Velour Velvet and Rough Linen, the
+   last two made grey so they can be tinted. size is how many squares one copy of a texture covers. */
+const TABLES = {
+  walnut: { name: 'Walnut', file: 'walnut.jpg', size: 14, room: '#1c130e' },
+  oak: { name: 'Oak planks', file: 'oak.jpg', size: 18, room: '#2b1f17' },
+  leather: { name: 'Leather', file: 'leather.jpg', size: 9, room: '#21150c' },
+  baize: { name: 'Green baize', file: 'cloth.jpg', tint: '#2f6a48', size: 5, room: '#122219' },
+  linen: { name: 'Linen', file: 'linen.jpg', tint: '#e9e3d6', size: 5, room: '#bdb7aa' },
+  plain: { name: 'None' },
+};
+const tableMat = new THREE.MeshStandardMaterial({ roughness: 0.85 });
+const table = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), tableMat);
+table.rotation.x = -Math.PI / 2; table.position.y = -0.425; table.receiveShadow = true; scene.add(table);
+scene.fog = new THREE.Fog(0x000000, 1e4, 1e4);
+const tableTex = {};
+function setTable(key){
+  const t = TABLES[key];
+  table.visible = !!t.file;
+  sceneEl.classList.toggle('table', table.visible);
+  if (t.file){
+    if (!tableTex[key]){
+      const tex = tableTex[key] = new THREE.TextureLoader().load('table/' + t.file, () => { dirty = true; });
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.setScalar(160 / t.size);
+      tex.encoding = THREE.sRGBEncoding;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    }
+    tableMat.map = tableTex[key]; tableMat.needsUpdate = true;
+    tableMat.color.set(t.tint || '#ffffff').convertSRGBToLinear();
+    // the clear colour is written as is, while fog is mixed in linear light before the sRGB encode
+    renderer.setClearColor(t.room, 1);
+    scene.fog.color.set(t.room).convertSRGBToLinear();
+  } else renderer.setClearColor(0x000000, 0);
+  // the phone's browser bar matches the room
+  themeMeta.content = t.room || themeMeta.dataset.plain;
+  placeCamera();
+  dirty = true;
+}
 
 /* last-move squares: a bright yellow wash with a solid rim, so the rim still shows around a piece's base;
    the destination square is a little stronger than the origin */
@@ -408,16 +578,80 @@ const MAT = {
   w: new THREE.MeshStandardMaterial({ color: 0xf1e8d4, roughness: 0.42, metalness: 0.02 }),
   b: new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 0.3, metalness: 0.1 }),
 };
-function makePiece(ch){
-  const color = ch === ch.toUpperCase() ? 'w' : 'b';
-  const g = new THREE.Group();
-  for (const geo of GEO[ch.toLowerCase()]){
-    const m = new THREE.Mesh(geo, MAT[color]);
-    m.castShadow = true; m.receiveShadow = true;
-    g.add(m);
+/* the real pieces: Poly Haven's "Chess Set" by Riley Queen (CC0), packed by tools/make_pieces.py.
+   Until it has loaded (or if it can't), the turned pieces above stand in, and loading swaps them. */
+const MODEL = {}, MODEL_SCALE = 16, MODEL_MAT = {};
+/* both sides of the model share one light colour map, tinted with the chosen colour (Settings › Piece colours) */
+const pieceColours = { w: '#ffffff', b: '#3e3b35' };
+const pieceWood = { value: 0 };
+function paintPieces(w, b, wood){
+  Object.assign(pieceColours, { w, b });
+  pieceWood.value = wood ? 1 : 0;
+  for (const c of 'wb'){
+    if (MODEL_MAT[c]) MODEL_MAT[c].color.set(pieceColours[c]).convertSRGBToLinear();
+    MAT[c].color.set(pieceColours[c]).convertSRGBToLinear();
   }
-  if (ch.toLowerCase() === 'n') g.rotation.y = color === 'w' ? Math.PI / 6 : Math.PI + Math.PI / 6;
+  dirty = true;
+}
+/* wood for the pieces is drawn in the shader: long grain, as if each piece were turned from a blank
+   cut off-centre from a log, so the growth rings sweep up the piece as gently wavy stripes */
+function addWoodGrain(mat){
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uWood = pieceWood;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWoodPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWoodPos = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vWoodPos;
+uniform float uWood;
+float woodHash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float woodNoise(vec3 x){
+  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(woodHash(i), woodHash(i + vec3(1, 0, 0)), f.x), mix(woodHash(i + vec3(0, 1, 0)), woodHash(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(woodHash(i + vec3(0, 0, 1)), woodHash(i + vec3(1, 0, 1)), f.x), mix(woodHash(i + vec3(0, 1, 1)), woodHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+if (uWood > 0.5){
+  vec3 p = vWoodPos * 100.0; // the model is in metres, so a piece is about 4 units across
+  float ring = fract(1.4 * (length(p.xz - vec2(9.0, -6.0)) + 1.6 * woodNoise(p * vec3(0.35, 0.04, 0.35))));
+  float late = smoothstep(0.55, 0.9, ring) * (1.0 - smoothstep(0.9, 1.0, ring));
+  float fibre = woodNoise(p * vec3(6.0, 0.25, 6.0));
+  diffuseColor.rgb *= (1.06 - 0.32 * late) * (0.93 + 0.1 * fibre);
+}`);
+  };
+}
+if (THREE.GLTFLoader) new THREE.GLTFLoader().load('pieces.glb', gltf => {
+  for (const o of gltf.scene.children) MODEL[o.name] = o;
+  gltf.scene.traverse(o => { if (o.isMesh) MODEL_MAT[o.material.name === 'black' ? 'b' : 'w'] = o.material; });
+  for (const c of 'wb') addWoodGrain(MODEL_MAT[c]);
+  paintPieces(pieceColours.w, pieceColours.b, pieceWood.value);
+  for (const g of view.meshes) if (g) fillPiece(g, g.userData.ch);
+  dirty = true;
+}, undefined, err => console.warn('pieces.glb', err));
+function fillPiece(g, ch){
+  const color = ch === ch.toUpperCase() ? 'w' : 'b', knight = ch.toLowerCase() === 'n';
+  g.clear();
+  if (MODEL[ch]){
+    /* the model's white pieces face +z, ours face -z; knights of both colours turn side-on to show their profile */
+    const m = MODEL[ch].clone();
+    m.scale.setScalar(MODEL_SCALE);
+    m.rotation.y = knight ? -Math.PI / 2 : color === 'w' ? Math.PI : 0;
+    m.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+    g.add(m);
+  } else {
+    for (const geo of GEO[ch.toLowerCase()]){
+      const m = new THREE.Mesh(geo, MAT[color]);
+      m.castShadow = true; m.receiveShadow = true;
+      if (knight) m.rotation.y = color === 'w' ? Math.PI / 6 : Math.PI + Math.PI / 6;
+      g.add(m);
+    }
+  }
   g.userData.ch = ch;
+}
+function makePiece(ch){
+  const g = new THREE.Group();
+  fillPiece(g, ch);
   return g;
 }
 
@@ -489,6 +723,9 @@ function placeCamera(){
   const d = orbit.base * orbit.zoom;
   camera.position.set(d * sp * Math.sin(orbit.az), d * Math.cos(orbit.pol), d * sp * Math.cos(orbit.az));
   camera.lookAt(0, -0.35, 0.45 * Math.cos(orbit.az));
+  // fog starts past the board, so only the table fades
+  scene.fog.near = table.visible ? d + 5 : 1e4;
+  scene.fog.far = table.visible ? d + 42 : 1e4;
 }
 let drag = null;
 const cv = renderer.domElement;
@@ -509,6 +746,16 @@ function faceSide(whiteBottom){
   const want = whiteBottom ? 0 : Math.PI;
   turnTo(orbit.az + Math.atan2(Math.sin(want - orbit.az), Math.cos(want - orbit.az)));
 }
+/* which way up the video's board is can change from game to game, so follow the position on
+   show (before the first one, the first game's) and turn when a game is played from the other side */
+function faceVideo(){
+  const ev = S.events[Math.max(S.idx, 0)];
+  const wb = ev && ev.wb != null ? ev.wb : S.whiteBottom;
+  if (wb == null || wb === S.viewWb) return;
+  S.viewWb = wb;
+  faceSide(wb);
+  if ($('#orient').value === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (wb ? 'White' : 'Black') + ' at bottom)';
+}
 
 function resize3D(){
   const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
@@ -518,11 +765,15 @@ function resize3D(){
   camera.aspect = aspect;
   // Fill the height on wide screens; back off on narrow ones so the whole board fits.
   orbit.base = 14.2 * Math.max(1, 1.45 / aspect);
-  // On wide screens, slide the board right to leave room for the video card.
   const wide = aspect > 1.15 && w > 700;
-  // Wide: slide the board right, beside the video card. Tall: lift it above the card.
+  // Wide: slide the board right, beside the video card. Tall: centre it in the room above the card,
+  // as big as fits there.
   if (wide) camera.setViewOffset(w, h, -Math.round(w * 0.085), 0, w, h);
-  else if (aspect < 0.9) camera.setViewOffset(w, h, 0, Math.round(h * 0.2), w, h);
+  else if (aspect < 0.9){
+    const free = Math.max(h * 0.4, $('#tools').getBoundingClientRect().top);
+    orbit.base = 14.2 * Math.max(1, 1.3 / aspect, 0.92 * h / free);
+    camera.setViewOffset(w, h, 0, Math.round((h - free) / 2), w, h);
+  }
   else camera.clearViewOffset();
   camera.updateProjectionMatrix();
   dirty = true;
@@ -547,8 +798,19 @@ const S = { source: null, videoId: null, src: null, events: [], status: null, er
   W: 0, H: 0, duration: 0, progress: 0, download: 0, cropped: false, idx: -2, fen: START_FEN, pollTimer: null, fixing: false,
   whiteBottom: null, player: null, playerReady: false, marks: [], markIdx: -2, showMarks: true, stop: null, saved: false };
 const stage = $('#stage'), card = $('#card'), video = $('#video'), still = $('#still');
+new ResizeObserver(resize3D).observe(card);
 const overlay = $('#overlay'), octx = overlay.getContext('2d'), hintEl = $('#hint');
-function hint(m, warn){ hintEl.textContent = m; hintEl.title = m; hintEl.classList.toggle('warn', !!warn); }
+/* the status above the video; while nothing is in progress, routine messages fade after a while */
+let hintTimer = 0;
+function hint(m, warn){
+  if (m === hintEl.dataset.msg && !!warn === hintEl.classList.contains('warn')) return;
+  hintEl.dataset.msg = m; hintEl.textContent = m; hintEl.title = m;
+  hintEl.classList.toggle('warn', !!warn);
+  hintEl.classList.remove('quiet');
+  clearTimeout(hintTimer);
+  const busy = S.fixing || ['downloading', 'loading', 'finding_board', 'processing'].includes(S.status);
+  if (!warn && !busy) hintTimer = setTimeout(() => hintEl.classList.add('quiet'), 5000);
+}
 const mmss = t => { t = Math.max(0, Math.floor(t)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); };
 
 /* players: YouTube's own embedded player, or a <video> for local files */
@@ -585,7 +847,7 @@ async function showYouTube(id){
 function stopReading(){ S.reading = null; if (S.stop){ S.stop(); S.stop = null; } }
 function clearReading(){
   stopReading();
-  Object.assign(S, { events: [], idx: -2, marks: [], markIdx: -2, whiteBottom: null, progress: 0, saved: false });
+  Object.assign(S, { events: [], idx: -2, marks: [], markIdx: -2, whiteBottom: null, viewWb: null, progress: 0, saved: false });
 }
 function resetAll(){
   clearTimeout(S.pollTimer);
@@ -609,7 +871,7 @@ function showEmpty(err){
   $('#empty').hidden = false;
   $('#emptyErr').hidden = !err; $('#emptyErr').textContent = err || '';
   history.replaceState(null, '', location.pathname);
-  hint('Paste a YouTube link to start.');
+  hint('');
 }
 async function startYouTube(url){
   resetAll();
@@ -626,7 +888,9 @@ async function startYouTube(url){
   // someone has read this video before: use their reading, no work to do
   if (j.results){
     const res = await fetch(`/api/videos/${j.video_id}/results`).then(x => x.ok ? x.json() : null).catch(() => null);
-    if (res && S.videoId === j.video_id){
+    // readings saved before positions carried their orientation (version 2) may have a game
+    // the wrong way up: read those again
+    if (res && res.version >= 2 && S.videoId === j.video_id){
       S.saved = true;
       update({ status: 'done', region: res.region, width: res.width, height: res.height, duration: res.duration,
         progress: 1, events: res.events, marks: res.marks, whiteBottom: res.white_bottom });
@@ -693,9 +957,10 @@ function update(u){
     S.region = u.region;
     if (!had) layoutPlayer(); else drawOverlay();
   }
-  if (u.whiteBottom != null && u.whiteBottom !== S.whiteBottom){ S.whiteBottom = u.whiteBottom; faceSide(u.whiteBottom); }
-  if (u.whiteBottom != null && $('#orient').value === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (u.whiteBottom ? 'White' : 'Black') + ' at bottom)';
+  if (u.whiteBottom != null) S.whiteBottom = u.whiteBottom;
+  faceVideo();
   $('#progress').style.width = (S.status === 'downloading' ? 100 * S.download : 100 * S.progress) + '%';
+  $('#progress').parentElement.classList.toggle('done', S.status === 'done' || S.status === 'error');
   updateButtons();
   statusHint();
   if (S.status === 'done') saveReading();
@@ -705,12 +970,12 @@ function update(u){
 function saveReading(){
   if (S.saved || S.source !== 'youtube' || S.manual || $('#orient').value !== 'auto') return;
   S.saved = true;
-  const body = { events: S.events, marks: S.marks, region: S.region, width: S.W, height: S.H, duration: S.duration, white_bottom: S.whiteBottom };
+  const body = { version: 2, events: S.events, marks: S.marks, region: S.region, width: S.W, height: S.H, duration: S.duration, white_bottom: S.whiteBottom };
   fetch(`/api/videos/${S.videoId}/results`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
 }
 
 const ERRORS = {
-  no_board: 'Couldn\u2019t find a chessboard in this video. Press Fix board area and draw it.',
+  no_board: 'Couldn\u2019t find a chessboard in this video. Draw it under Settings \u203a Draw the board area yourself.',
   youtube_blocked: 'YouTube refused to let the server download this video (see the README about cookies).',
   too_long: 'This video is longer than the server allows.',
   download_failed: 'The server couldn\u2019t download this video.',
@@ -726,7 +991,7 @@ function statusHint(){
     case 'finding_board': return hint('Looking for the chessboard\u2026');
     case 'processing': {
       const done = S.progress * S.duration;
-      return hint(`Reading moves: ${mmss(done)} of ${mmss(S.duration)} analyzed. You can press play now.`);
+      return hint(`Reading moves: ${mmss(done)} of ${mmss(S.duration)}. You can press play.`);
     }
     case 'done': return hint(moves ? `Ready. ${moves} move${moves > 1 ? 's' : ''} found.` : 'Ready.');
     case 'error': return hint(ERRORS[S.error] || 'Something went wrong while reading this video.', true);
@@ -760,6 +1025,7 @@ setInterval(() => {
     highlight(ev);
     $('#lichessBtn').href = 'https://lichess.org/analysis/standard/' + S.fen.replace(/ /g, '_');
   }
+  faceVideo();
   const mi = indexAt(S.marks, t);
   if (mi !== S.markIdx){ S.markIdx = mi; drawMarks(mi >= 0 ? S.marks[mi] : null); }
   if (S.status === 'processing' && !S.fixing){
@@ -834,6 +1100,9 @@ async function startFix(){
   card.classList.add('expanded'); stage.classList.add('drawing');
   $('#fixBtn').setAttribute('aria-pressed', 'true');
   hint('Drag a box around the board\u2019s 8\u00d78 squares.');
+  const cancel = document.createElement('button');
+  cancel.textContent = 'Cancel'; cancel.onclick = () => endFix();
+  hintEl.append(cancel);
   drawOverlay();
   // show the frame being watched, from a hidden copy of the video
   const src = S.src;
@@ -901,7 +1170,7 @@ function restart(region){
 
 /* buttons and menu */
 function updateButtons(){
-  $('#cropBtn').disabled = !S.region;
+  $('#cropBtn').hidden = !S.region;
   $('#fixBtn').disabled = !S.src || !['processing', 'done', 'error'].includes(S.status);
 }
 $('#urlForm').addEventListener('submit', e => { e.preventDefault(); startYouTube($('#ytUrl').value.trim()); });
@@ -917,12 +1186,65 @@ function setShowMarks(on){
 }
 $('#marksBtn').onclick = () => setShowMarks(!S.showMarks);
 try { if (localStorage.getItem('shadowboard.marks') === '0') setShowMarks(false); } catch (e) {}
+/* colours of the board and pieces, kept in this browser */
+const THEMES = {
+  board: [['Green', '#d9cdae', '#56744f'], ['Brown', '#f0d9b5', '#b58863'], ['Blue', '#dee3e6', '#8ca2ad'],
+    ['Grey', '#e4e4e0', '#8f938e'], ['Coral', '#f3e7d9', '#c97b63'], ['Purple', '#e9e2f0', '#8a74a8'],
+    ['Maple and walnut', '#ecd3a6', '#8b5a34', true], ['Oak', '#e6c99c', '#b07f4c', true],
+    ['Rosewood', '#e8c69c', '#6b3424', true], ['Grey wood', '#dedad2', '#7a7369', true]],
+  pieces: [['Ivory and ebony', '#ffffff', '#3e3b35'], ['Boxwood and rosewood', '#ffd9a3', '#6e3a24', true],
+    ['Maple and walnut', '#ffe6b8', '#5a3820', true], ['Cream and red', '#fff3dc', '#a8352c'],
+    ['Cream and blue', '#fff3dc', '#2f4f86'], ['Silver and gold', '#d6dade', '#c9a23e']],
+};
+const COLOUR_UI = {
+  board: { select: '#boardTheme', inputs: ['#boardLight', '#boardDark'], wood: '#boardWood', paint: paintBoard },
+  pieces: { select: '#pieceTheme', inputs: ['#pieceWhite', '#pieceBlack'], wood: '#pieceWood', paint: paintPieces },
+};
+let colourPrefs = {};
+try { colourPrefs = JSON.parse(localStorage.getItem('shadowboard.colours')) || {}; } catch (e) {}
+function setColours(kind, a, b, wood, save){
+  const ui = COLOUR_UI[kind];
+  ui.paint(a, b, wood);
+  $(ui.inputs[0]).value = a; $(ui.inputs[1]).value = b; $(ui.wood).checked = wood;
+  const i = THEMES[kind].findIndex(([, x, y, w = false]) => x === a && y === b && w === wood);
+  $(ui.select).value = i >= 0 ? String(i) : 'custom';
+  if (save){
+    colourPrefs[kind] = [a, b, wood];
+    try { localStorage.setItem('shadowboard.colours', JSON.stringify(colourPrefs)); } catch (e) {}
+  }
+}
+for (const [kind, ui] of Object.entries(COLOUR_UI)){
+  const sel = $(ui.select);
+  THEMES[kind].forEach(([name], i) => sel.add(new Option(name, String(i))));
+  sel.add(new Option('Custom', 'custom'));
+  sel.onchange = () => { const t = THEMES[kind][+sel.value]; if (t) setColours(kind, t[1], t[2], !!t[3], true); };
+  const changed = () => setColours(kind, $(ui.inputs[0]).value, $(ui.inputs[1]).value, $(ui.wood).checked, true);
+  for (const el of [...ui.inputs, ui.wood]) $(el).addEventListener('input', changed);
+  const saved = colourPrefs[kind], valid = Array.isArray(saved) && /^#[0-9a-f]{6}$/i.test(saved[0]) && /^#[0-9a-f]{6}$/i.test(saved[1]);
+  const [, a, b] = THEMES[kind][0];
+  setColours(kind, valid ? saved[0] : a, valid ? saved[1] : b, valid && saved[2] === true, false);
+}
+const tableSel = $('#tableSel'), themeMeta = document.querySelector('meta[name="theme-color"]');
+themeMeta.dataset.plain = themeMeta.content;
+for (const [key, t] of Object.entries(TABLES)) tableSel.add(new Option(t.name, key));
+tableSel.onchange = () => {
+  setTable(tableSel.value);
+  try { localStorage.setItem('shadowboard.table', tableSel.value); } catch (e) {}
+};
+try { const k = localStorage.getItem('shadowboard.table'); if (TABLES[k]) tableSel.value = k; } catch (e) {}
+setTable(tableSel.value);
 $('#copyBtn').onclick = async () => {
   try { await navigator.clipboard.writeText(S.fen); hint('FEN copied.'); } catch (e) { hint(S.fen); }
 };
-const menu = $('#menu'), moreBtn = $('#moreBtn');
-function closeMenu(){ menu.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); }
-moreBtn.onclick = e => { e.stopPropagation(); const open = menu.hidden; menu.hidden = !open; moreBtn.setAttribute('aria-expanded', open ? 'true' : 'false'); };
+const menu = $('#menu'), moreBtn = $('#moreBtn'), menuBackdrop = $('#menuBackdrop');
+function closeMenu(){ menu.hidden = menuBackdrop.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); }
+function openMenu(){
+  // as a popover it opens upwards from the card, so it may only be as tall as the room above it
+  menu.style.maxHeight = matchMedia('(max-width:700px), (max-height:500px)').matches ? '' : Math.max(240, $('#tools').getBoundingClientRect().top - 16) + 'px';
+  menu.hidden = menuBackdrop.hidden = false; moreBtn.setAttribute('aria-expanded', 'true');
+}
+moreBtn.onclick = e => { e.stopPropagation(); menu.hidden ? openMenu() : closeMenu(); };
+$('#menuClose').onclick = closeMenu;
 document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeMenu(); if (S.fixing) endFix(); } });
 menu.addEventListener('click', e => { if (e.target.closest('button')) setTimeout(closeMenu, 0); });

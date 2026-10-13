@@ -93,7 +93,7 @@ const local = {
   refine(img, box){ return E.refine(img.data, img.w, img.h, 4, box); },
   /* board crops spread through the video -> true if White is at the bottom, null if unclear */
   async orient(crops){ await init(); return E.detectOrientation(predict, crops.map(toBoard)); },
-  async start(whiteBottom, decided){ await init(); reader = new E.Reader(predict, { whiteBottom, decided }); },
+  async start(whiteBottom, decided, fixed){ await init(); reader = new E.Reader(predict, { whiteBottom, decided, fixed }); },
   frame(t, img){ return reader.frame(t, toBoard(img)); },
 };
 
@@ -103,7 +103,7 @@ const ops = {
   search: ({ img }) => local.search(img),
   refine: ({ img, box }) => local.refine(img, box),
   orient: ({ crops }) => local.orient(crops),
-  start: ({ whiteBottom, decided }) => local.start(whiteBottom, decided),
+  start: ({ whiteBottom, decided, fixed }) => local.start(whiteBottom, decided, fixed),
   frame: ({ t, img }) => local.frame(t, img),
   /* read a whole MP4 here; {fallback: true} if it can't be, and the page uses a <video> */
   async read({ src, region, orientation }, id){
@@ -117,7 +117,7 @@ const ops = {
       // with this reading's own reader (one called off may still have frames in hand)
       let chain = Promise.resolve(), mine = null;
       const steps = { ...local,
-        async start(whiteBottom, decided){ mine = new E.Reader(predict, { whiteBottom, decided }); },
+        async start(whiteBottom, decided, fixed){ mine = new E.Reader(predict, { whiteBottom, decided, fixed }); },
         frame: (t, img) => (chain = chain.then(() => mine.frame(t, toBoard(img)))) };
       await readSource(source, steps, { region, orientation, live, report: u => self.postMessage({ id, progress: u }) });
       return { done: true };
