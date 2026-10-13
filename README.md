@@ -79,7 +79,7 @@ you open never leave your device.
   Stationery Supplies, Round Spectacles, Digital Wrist Watch, Potted Plant 04, Croissant, Food
   Apple 01, Magnifying Glass 01 and Vintage Pocket Watch, packed into `static/props.glb` (880 KB,
   loaded after the pieces) by `tools/make_props.py`.
-- The camera bar at the top right: auto-rotate (a slow swing left and right, remembered in the
+- The camera bar at the top right: auto-rotate (a very slow swing, about 25° left and right, remembered in the
   browser), views (overview, top down, player's eye, from the side, the whole table) and a button
   to look from the other side.
 

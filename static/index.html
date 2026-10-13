@@ -1063,8 +1063,9 @@ function showView(name){
   dirty = true;
 }
 for (const b of document.querySelectorAll('[data-view]')) b.onclick = () => showView(b.dataset.view);
-/* auto-rotate: swing slowly left and right around wherever the camera is pointed */
-const SWAY = { on: false, phase: 0, amp: 0.65, period: 44 };
+/* auto-rotate: swing slowly left and right around wherever the camera is pointed, about 25° each
+   way over two and a half minutes, never faster than about 1° a second, so it doesn't pull the eye */
+const SWAY = { on: false, phase: 0, amp: 0.45, period: 140 };
 function setSway(on){
   if (!on && SWAY.on){
     // stop where it is
