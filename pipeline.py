@@ -323,6 +323,21 @@ def orientation_vote(cells):
     return 1 if rows[w].mean() > rows[b].mean() else -1
 
 
+def detect_orientation(path, region, duration, samples=16):
+    """True if White is at the bottom, by majority over frames spread through the whole video,
+    so an intro, a thumbnail or the first second of play can't decide it. None if unclear."""
+    tiles = []
+    for i in range(samples):
+        img = cv2.imdecode(np.frombuffer(frame_at(path, duration * (i + 0.5) / samples), np.uint8), cv2.IMREAD_COLOR)
+        if img is not None:
+            tiles.append(board_tiles(crop256(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), region)))
+    if not tiles:
+        return None
+    probs = recognizer().predict(np.concatenate(tiles)).reshape(len(tiles), 64, 13)
+    votes = sum(orientation_vote(cells) for cells in probs)
+    return votes > 0 if abs(votes) >= 2 else None
+
+
 def cells_to_squares(cells, white_bottom):
     out = np.empty_like(cells)
     for i in range(64):
@@ -346,6 +361,10 @@ def process(path, on_progress=None, region=None, orientation='auto', fps=FPS, ba
     votes = 0
     white_bottom = orientation != 'b'
     decided = orientation != 'auto'
+    if not decided:
+        found = detect_orientation(path, region, duration)
+        if found is not None:
+            white_bottom, decided = found, True
     pending_t, pending_tiles = [], []
     sent = 0
 

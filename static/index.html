@@ -273,8 +273,18 @@ frame.position.y = -0.21; frame.receiveShadow = true; scene.add(frame);
 const top = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshStandardMaterial({ map: boardTex, roughness: 0.72 }));
 top.rotation.x = -Math.PI / 2; top.position.y = 0.002; top.receiveShadow = true; scene.add(top);
 
-const hlMat = new THREE.MeshBasicMaterial({ color: 0xcfa95f, transparent: true, opacity: 0.5, depthWrite: false });
-const hl = [0, 1].map(() => { const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), hlMat); m.rotation.x = -Math.PI / 2; m.position.y = 0.006; m.visible = false; scene.add(m); return m; });
+/* last-move squares: a bright yellow wash with a solid rim, so the rim still shows around a piece's base;
+   the destination square is a little stronger than the origin */
+const hlTex = (fill, rim) => canvasTex(128, (g, n) => {
+  g.fillStyle = fill; g.fillRect(0, 0, n, n);
+  const w = n * 0.07;
+  g.strokeStyle = rim; g.lineWidth = w; g.strokeRect(w / 2, w / 2, n - w, n - w);
+});
+const hlMats = [
+  new THREE.MeshBasicMaterial({ map: hlTex('rgba(255, 214, 51, 0.55)', 'rgba(255, 196, 0, 0.95)'), transparent: true, depthWrite: false }),
+  new THREE.MeshBasicMaterial({ map: hlTex('rgba(255, 214, 51, 0.72)', 'rgba(255, 186, 0, 1)'), transparent: true, depthWrite: false }),
+];
+const hl = hlMats.map(mat => { const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat); m.rotation.x = -Math.PI / 2; m.position.y = 0.006; m.visible = false; scene.add(m); return m; });
 
 const sqPos = i => new THREE.Vector3((i % 8) - 3.5, 0, 3.5 - Math.floor(i / 8));
 const sqIndex = name => (+name[1] - 1) * 8 + FILES.indexOf(name[0]);
@@ -433,7 +443,13 @@ cv.addEventListener('pointermove', e => {
 });
 cv.addEventListener('pointerup', () => { drag = null; });
 cv.addEventListener('wheel', e => { e.preventDefault(); orbit.zoom = Math.min(1.7, Math.max(0.55, orbit.zoom * (1 + Math.sign(e.deltaY) * 0.08))); dirty = true; }, { passive: false });
-$('#flipBtn').onclick = () => { orbit.azTarget = orbit.az + Math.PI; if (reduceMotion) orbit.az = orbit.azTarget; };
+function turnTo(az){ orbit.azTarget = az; if (reduceMotion) orbit.az = az; dirty = true; }
+$('#flipBtn').onclick = () => turnTo(orbit.az + Math.PI);
+/* view the board from the same side as the video: White's side (az 0) or Black's (az π) */
+function faceSide(whiteBottom){
+  const want = whiteBottom ? 0 : Math.PI;
+  turnTo(orbit.az + Math.atan2(Math.sin(want - orbit.az), Math.cos(want - orbit.az)));
+}
 
 function resize3D(){
   const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
@@ -469,7 +485,7 @@ function loop(now){
 
 /* ---------- app ---------- */
 const S = { job: null, gen: null, events: [], status: null, region: null, W: 0, H: 0, duration: 0, progress: 0,
-  source: null, videoId: null, cropped: false, idx: -2, fen: START_FEN, pollTimer: null, fixing: false,
+  source: null, videoId: null, cropped: false, idx: -2, fen: START_FEN, pollTimer: null, fixing: false, whiteBottom: null,
   player: null, playerReady: false };
 const stage = $('#stage'), card = $('#card'), video = $('#video'), still = $('#still');
 const overlay = $('#overlay'), octx = overlay.getContext('2d'), hintEl = $('#hint');
@@ -510,7 +526,7 @@ async function showYouTube(id){
 function resetAll(){
   clearTimeout(S.pollTimer);
   Object.assign(S, { job: null, gen: null, events: [], status: null, region: null, W: 0, H: 0, duration: 0,
-    progress: 0, source: null, videoId: null, idx: -2, fen: START_FEN });
+    progress: 0, source: null, videoId: null, idx: -2, fen: START_FEN, whiteBottom: null });
   endFix(true);
   setCrop(false);
   try { if (S.player && S.playerReady) S.player.stopVideo(); } catch (e) {}
@@ -602,7 +618,8 @@ async function poll(){
   S.progress = j.progress || 0; S.status = j.status; S.statusError = j.error;
   if (!hadRegion && S.region) layoutPlayer();
   if (j.orientation && $('#orient').value !== j.orientation) $('#orient').value = j.orientation;
-  if (j.white_bottom !== null && j.orientation === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (j.white_bottom ? 'White' : 'Black') + ' at bottom)';
+  if (j.white_bottom != null && j.white_bottom !== S.whiteBottom){ S.whiteBottom = j.white_bottom; faceSide(j.white_bottom); }
+  if (j.white_bottom != null && j.orientation === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (j.white_bottom ? 'White' : 'Black') + ' at bottom)';
   $('#progress').style.width = (j.status === 'downloading' ? 100 * (j.download || 0) : 100 * S.progress) + '%';
   updateButtons();
   statusHint();
@@ -762,10 +779,15 @@ overlay.addEventListener('pointerup', async () => {
 });
 async function restartWith(body){
   if (!S.job) return;
-  S.events = []; S.idx = -2;
+  clearTimeout(S.pollTimer);
+  S.events = []; S.idx = -2; S.whiteBottom = null;
   hint('Reading the video again with the new settings\u2026');
-  await fetch(`/api/jobs/${S.job}/board`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
-  S.gen = null;
+  const r = await fetch(`/api/jobs/${S.job}/board`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
+  const j = r && r.ok ? await r.json().catch(() => null) : null;
+  // a poll that was already in flight may have added the old run's positions; drop them
+  clearTimeout(S.pollTimer);
+  S.events = []; S.idx = -2; S.whiteBottom = null;
+  S.gen = j ? j.gen : null;
   poll();
 }
 
