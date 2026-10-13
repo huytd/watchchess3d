@@ -56,11 +56,11 @@ you open never leave your device.
   by Riley Queen (CC0), cut down to one mesh per piece type and 512px textures (690 KB) by
   `tools/make_pieces.py`. Simple built-in pieces show until it has loaded. Both sides share one
   light colour map that the page tints, so the colours of the pieces and the board can be changed
-  under ⋯ › Board colours / Piece colours (presets or any colour; remembered in the browser).
+  under Settings › Board colours / Piece colours (presets or any colour; remembered in the browser).
   Ticking Wood turns the chosen colours into wood of that tone: the board lays a neutral grain
   (`static/wood.jpg`, from Poly Haven's [Cherry Veneer](https://polyhaven.com/a/cherry_veneer), CC0)
   over each square, and the pieces get turned-wood grain drawn in the shader.
-- `static/table/`: what the board stands on (⋯ › Table: walnut by default, oak planks, leather,
+- `static/table/`: what the board stands on (Settings › Table: walnut by default, oak planks, leather,
   green baize, linen, or none), from Poly Haven's CC0 Wood Table 001, Wood Table, Brown Leather,
   Velour Velvet and Rough Linen. The table fades into a dim room with fog, under a soft vignette.
 
@@ -88,9 +88,9 @@ start while it works. The server itself stays under 100 MB of memory and uses al
 - **YouTube often blocks downloads from cloud servers** ("Sign in to confirm you're not a bot").
   It usually works from a home connection. On a VPS, export your browser's YouTube cookies to
   a cookies.txt and set `YTDLP_COOKIES`, and keep yt-dlp up to date.
-- If the board isn't found, or the wrong area is used, press **Fix board area** and draw it.
+- If the board isn't found, or the wrong area is used, open Settings (the gear on the video) › **Draw the board area yourself**.
 - Only flat 2D digital boards are recognized (Lichess/chess.com style), not filmed physical boards.
 - Arrows come in four colours (green, red, blue, orange). Faint ones (a pale arrow on a board of
   a similar colour, thin Lichess circles in a low-quality video) can be missed. Turn them off
-  under ⋯ › Show arrows from the video.
+  under Settings › Show arrows from the video.
 - Downloaded videos stay in the data folder until you delete them.
