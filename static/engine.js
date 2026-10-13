@@ -258,7 +258,7 @@ function agreement(cells, whiteBottom, b){
     const o = i * 13;
     let w = 0, bl = 0;
     for (let k = 1; k <= 6; k++){ w += cells[o + k]; bl += cells[o + 6 + k]; }
-    const seen = cells[o] > 0.6 ? '.' : w > 0.6 ? 'w' : bl > 0.6 ? 'b' : null;
+    const seen = cells[o] > 0.5 ? '.' : w > 0.5 ? 'w' : bl > 0.5 ? 'b' : null;
     if (!seen) continue;
     const p = b[cellSquare(i, whiteBottom)];
     if (seen === (p === '.' ? '.' : p === p.toUpperCase() ? 'w' : 'b')) same++; else differ++;
