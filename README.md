@@ -1,9 +1,9 @@
 # Shadowboard (server version)
 
-Paste a YouTube link (or upload a video) and watch it with a 3D board that follows the game.
-Works on phones: no screen sharing. The server downloads the video, finds the board,
-reads it about 3 times a second, and sends back a timeline of positions; the page shows
-whichever position matches the current playback time, so pausing and seeking just work.
+Paste a YouTube link (or open a video file) and watch it with a 3D board that follows the game.
+Works on phones: no screen sharing. The server only downloads the video; your browser finds
+the board, reads it about 3 times a second and builds a timeline of positions, and the page
+shows whichever position matches the current playback time, so pausing and seeking just work.
 Arrows and circles the streamer draws on the board show up on the 3D board too.
 
 ## Run it
@@ -25,46 +25,55 @@ home, put it behind HTTPS on a small VPS or a tunnel (Cloudflare Tunnel, Tailsca
 
 ## How it works
 
-- `pipeline.py`: finds the board automatically by searching every size and position for
-  the strongest 8x8 checkerboard pattern, then fine-tunes the edges. Reads each frame with
-  the CNN (only the squares that changed since they were last read), smooths over time, and turns readings into positions, preferring legal moves
-  (python-chess) so one shaky square can't derail the game. Each position is timestamped
-  to when it first appeared.
-- `marks.py`: finds the arrows, circles and red/blue squares streamers draw (Lichess and
-  chess.com style) with plain image processing, no model. Arrows always join two square
-  centres, so it tests every possible arrow (plus chess.com's L-shaped knight arrows)
-  against a mask of strongly coloured pixels: the line must be covered, the strip beside it
-  clear, and one end wider than the other (the head). A mark must hold for two readings to
-  show and be gone for two to disappear. About 20 ms per frame, and skipped when nothing on
-  the board changed.
-- `recognizer.py`: the square classifier (same weights as the browser version), run with
-  OpenCV's dnn module.
-- `app.py`: FastAPI. Jobs run in the background; the page polls and can start playing
-  while the rest of the video is still being read. Results are cached per video.
+The server does no video work: it fetches YouTube videos with yt-dlp, copies them into a plain
+MP4 (no re-encoding), and serves them to the browser, which does all the reading. Video files
+you open never leave your device.
+
+- `app.py`: FastAPI. Downloads run in the background while the page shows progress. A finished
+  reading is sent back and kept, so the next person to open the same video gets it instantly
+  (only readings with the board found automatically and the orientation detected).
+- `static/read.js` picks how to get frames. An MP4 (every download, most files) is decoded in a
+  Web Worker with WebCodecs (`static/mp4.js` reads the file's index; each frame is decoded once
+  and it keeps going in a background tab). Anything else, or a browser without WebCodecs, falls
+  back to stepping a hidden `<video>` through the video.
+- `static/pipeline.js`: the steps of a reading, the same for both: find the board, work out which
+  way up it is, then read the video frame by frame.
+- `static/engine.js` (in the worker): finds the board automatically by searching every size and
+  position for the strongest 8x8 checkerboard pattern, then fine-tunes the edges. Reads each frame
+  with the CNN (only the squares that changed since they were last read), smooths over time, and
+  turns readings into positions, preferring legal moves (`static/rules.js`, which follows
+  python-chess) so one shaky square can't derail the game. Each position is timestamped to when
+  it first appeared. It also finds the arrows, circles and red/blue squares streamers draw
+  (Lichess and chess.com style) with plain image processing: arrows always join two square
+  centres, so it tests every possible arrow (plus chess.com's L-shaped knight arrows) against a
+  mask of strongly coloured pixels. A mark must hold for two readings to show and be gone for two
+  to disappear. This is a line-by-line port of the Python pipeline the server used to run, and
+  gives the same moves and marks on the same frames.
+- `static/cnn.js`: the square classifier (`static/model.json`), run with TensorFlow.js on the
+  GPU (WebGL) or with WebAssembly, whichever is faster on the device.
 - `static/index.html`: the page (3D board + YouTube's embedded player).
 
-Speed: a 20-minute 480p video takes roughly 1 to 2 minutes on a single CPU core, about half of
-it spent by ffmpeg decoding the video. You can watch from the start while it works.
-
-Memory: the whole server, ffmpeg included, peaks around 190 MB while reading a 480p video
-(about 230 MB for 1080p uploads), so a 512 MB server is plenty with `SHADOWBOARD_WORKERS=1`.
-Each extra worker adds about 100 MB.
+Speed depends on the device. Without a GPU (WebAssembly on 4 CPU cores) a 71-second test video
+took about 15 seconds, so roughly 2.5 minutes for 20 minutes of video; you can watch from the
+start while it works. The server itself stays under 100 MB of memory and uses almost no CPU.
 
 ## Settings (environment variables)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SHADOWBOARD_DATA` | `./data` | where downloaded videos and results are kept |
+| `SHADOWBOARD_DATA` | `./data` | where downloaded videos and saved readings are kept |
 | `SHADOWBOARD_MAX_SECONDS` | 10800 | longest video accepted |
-| `SHADOWBOARD_MAX_UPLOAD_MB` | 1024 | largest upload accepted |
-| `SHADOWBOARD_WORKERS` | 1 | videos processed at the same time |
+| `SHADOWBOARD_WORKERS` | 2 | videos downloaded at the same time |
 | `YTDLP_COOKIES` | (none) | path to a cookies.txt, if YouTube blocks the server |
 
 ## Things to know
 
 - **YouTube's terms of service don't allow downloading videos** outside YouTube's own apps.
   Running this for yourself is a personal-use gray area; don't run it as a public service.
-  Uploading your own recordings avoids the issue.
+  Opening your own recordings avoids the issue.
+- The page loads TensorFlow.js from a CDN (jsDelivr) the first time, so the browser needs to reach it.
+- A video is downloaded to the server and then once more by each browser that reads it (480p,
+  video only: a few MB per minute).
 - **YouTube often blocks downloads from cloud servers** ("Sign in to confirm you're not a bot").
   It usually works from a home connection. On a VPS, export your browser's YouTube cookies to
   a cookies.txt and set `YTDLP_COOKIES`, and keep yt-dlp up to date.
