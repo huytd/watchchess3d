@@ -72,6 +72,16 @@ you open never leave your device.
 - `static/table/`: what the board stands on (Settings › Table: walnut by default, oak planks, leather,
   green baize, linen, or none), from Poly Haven's CC0 Wood Table 001, Wood Table, Brown Leather,
   Velour Velvet and Rough Linen. The table fades into a dim room with fog, under a soft vignette.
+- On the table, laid out afresh each time the page opens: each player's scoresheet (the moves of the
+  game on show are written in as it goes) with a pen and a cup of coffee, a chess clock whose time
+  runs for the side to move while the video plays, and a few odds and ends picked at random. The
+  clock and scoresheets are drawn in the page; the rest are Poly Haven models (CC0): Tea Set 01,
+  Stationery Supplies, Round Spectacles, Digital Wrist Watch, Potted Plant 04, Croissant, Food
+  Apple 01, Magnifying Glass 01 and Vintage Pocket Watch, packed into `static/props.glb` (880 KB,
+  loaded after the pieces) by `tools/make_props.py`.
+- The camera bar at the top right: auto-rotate (a slow swing left and right, remembered in the
+  browser), views (overview, top down, player's eye, from the side, the whole table) and a button
+  to look from the other side.
 
 Speed depends on the device. Without a GPU (WebAssembly on 4 CPU cores) a 71-second test video
 took about 15 seconds, so roughly 2.5 minutes for 20 minutes of video; you can watch from the
