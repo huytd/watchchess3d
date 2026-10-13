@@ -117,7 +117,7 @@ img,video,canvas{max-width:none}
 /* server version additions */
 .stage #yt, .stage iframe{position:absolute; inset:0; width:100%; height:100%; border:0}
 .card.cropped .stage #yt, .card.cropped .stage iframe, .card.cropped .stage video{inset:auto}
-.stage img.still{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000}
+.stage .still{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000}
 .progress{height:3px; background:transparent}
 .progress span{display:block; height:100%; width:0; background:var(--accent); transition:width .4s ease}
 .empty form{display:flex; gap:8px; flex-wrap:wrap}
@@ -132,7 +132,7 @@ img,video,canvas{max-width:none}
   <div class="stage" id="stage">
     <div id="yt"></div>
     <video id="video" playsinline controls hidden></video>
-    <img class="still" id="still" alt="" hidden>
+    <canvas class="still" id="still" hidden></canvas>
     <canvas id="overlay"></canvas>
     <div class="empty" id="empty">
       <p class="lead">Follow a chess video in 3D</p>
@@ -173,9 +173,8 @@ img,video,canvas{max-width:none}
 </aside>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>
-(() => {
-'use strict';
+<script type="module">
+import { readVideo, warmUp, openVideo, closeVideo, seek } from './read.js';
 const $ = s => document.querySelector(s);
 const FILES = 'abcdefgh';
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -544,15 +543,15 @@ function loop(now){
 
 
 /* ---------- app ---------- */
-const S = { job: null, gen: null, events: [], status: null, region: null, W: 0, H: 0, duration: 0, progress: 0,
-  source: null, videoId: null, cropped: false, idx: -2, fen: START_FEN, pollTimer: null, fixing: false, whiteBottom: null,
-  player: null, playerReady: false, marks: [], markIdx: -2, showMarks: true };
+const S = { source: null, videoId: null, src: null, events: [], status: null, error: null, region: null, manual: false,
+  W: 0, H: 0, duration: 0, progress: 0, download: 0, cropped: false, idx: -2, fen: START_FEN, pollTimer: null, fixing: false,
+  whiteBottom: null, player: null, playerReady: false, marks: [], markIdx: -2, showMarks: true, stop: null, saved: false };
 const stage = $('#stage'), card = $('#card'), video = $('#video'), still = $('#still');
 const overlay = $('#overlay'), octx = overlay.getContext('2d'), hintEl = $('#hint');
 function hint(m, warn){ hintEl.textContent = m; hintEl.title = m; hintEl.classList.toggle('warn', !!warn); }
 const mmss = t => { t = Math.max(0, Math.floor(t)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); };
 
-/* players: YouTube's own embedded player, or a <video> for uploads */
+/* players: YouTube's own embedded player, or a <video> for local files */
 function playerTime(){
   if (S.source === 'youtube' && S.player && S.playerReady) return S.player.getCurrentTime() || 0;
   if (S.source === 'upload') return video.currentTime || 0;
@@ -582,11 +581,20 @@ async function showYouTube(id){
   });
 }
 
-/* starting a job */
+/* starting: the server downloads YouTube videos; this page does all the reading */
+function stopReading(){ S.reading = null; if (S.stop){ S.stop(); S.stop = null; } }
+function clearReading(){
+  stopReading();
+  Object.assign(S, { events: [], idx: -2, marks: [], markIdx: -2, whiteBottom: null, progress: 0, saved: false });
+}
 function resetAll(){
   clearTimeout(S.pollTimer);
-  Object.assign(S, { job: null, gen: null, events: [], status: null, region: null, W: 0, H: 0, duration: 0,
-    progress: 0, source: null, videoId: null, idx: -2, fen: START_FEN, whiteBottom: null, marks: [], markIdx: -2 });
+  clearReading();
+  if (S.source === 'upload' && S.src) URL.revokeObjectURL(S.src);
+  if (S.stillVideo){ closeVideo(S.stillVideo); S.stillVideo = null; }
+  Object.assign(S, { source: null, videoId: null, src: null, file: null, status: null, error: null, region: null, manual: false,
+    W: 0, H: 0, duration: 0, download: 0, fen: START_FEN });
+  $('#orient').value = 'auto'; $('#orient').options[0].textContent = 'Detect';
   endFix(true);
   setCrop(false);
   try { if (S.player && S.playerReady) S.player.stopVideo(); } catch (e) {}
@@ -605,102 +613,123 @@ function showEmpty(err){
 }
 async function startYouTube(url){
   resetAll();
+  warmUp();
   let r;
-  try { r = await fetch('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) }); }
+  try { r = await fetch('/api/videos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) }); }
   catch (e) { return showEmpty('Can\u2019t reach the server.'); }
   if (!r.ok) return showEmpty(r.status === 400 ? 'That doesn\u2019t look like a YouTube video link.' : 'The server couldn\u2019t start on that video.');
   const j = await r.json();
-  Object.assign(S, { job: j.id, source: 'youtube', videoId: j.video_id });
-  history.replaceState(null, '', '#job=' + j.id + '&v=' + j.video_id);
+  Object.assign(S, { source: 'youtube', videoId: j.video_id });
+  history.replaceState(null, '', '#v=' + j.video_id);
   $('#empty').hidden = true;
   showYouTube(j.video_id);
-  poll();
+  // someone has read this video before: use their reading, no work to do
+  if (j.results){
+    const res = await fetch(`/api/videos/${j.video_id}/results`).then(x => x.ok ? x.json() : null).catch(() => null);
+    if (res && S.videoId === j.video_id){
+      S.saved = true;
+      update({ status: 'done', region: res.region, width: res.width, height: res.height, duration: res.duration,
+        progress: 1, events: res.events, marks: res.marks, whiteBottom: res.white_bottom });
+    }
+  }
+  pollDownload();
+}
+async function pollDownload(){
+  clearTimeout(S.pollTimer);
+  const vid = S.videoId;
+  if (!vid) return;
+  let j;
+  try {
+    const r = await fetch('/api/videos/' + vid);
+    if (r.status === 404) return startYouTube('https://youtu.be/' + vid);  // the server restarted
+    j = await r.json();
+  } catch (e) { S.pollTimer = setTimeout(pollDownload, 3000); return; }
+  if (vid !== S.videoId) return;
+  if (j.status === 'ready'){
+    S.src = `/api/videos/${vid}/file`;
+    if (S.status !== 'done') startReading();
+    updateButtons();
+    return;
+  }
+  if (j.status === 'error'){ if (S.status !== 'done') update({ status: 'error', error: j.error }); return; }
+  if (S.status !== 'done'){
+    S.download = j.download || 0;
+    update({ status: 'downloading' });
+  }
+  S.pollTimer = setTimeout(pollDownload, 1000);
 }
 function startUpload(file){
   resetAll();
-  S.source = 'upload';
-  video.src = URL.createObjectURL(file); video.hidden = false;
+  warmUp();
+  Object.assign(S, { source: 'upload', src: URL.createObjectURL(file), file });
+  video.src = S.src; video.hidden = false;
   $('#empty').hidden = true;
-  const xhr = new XMLHttpRequest(), fd = new FormData();
-  fd.append('file', file);
-  xhr.upload.onprogress = e => { if (e.lengthComputable){ $('#progress').style.width = (100 * e.loaded / e.total) + '%'; hint('Uploading\u2026 ' + Math.round(100 * e.loaded / e.total) + '%'); } };
-  xhr.onload = () => {
-    if (xhr.status !== 200) return showEmpty(xhr.status === 413 ? 'That file is too large for this server.' : 'The server couldn\u2019t read that video.');
-    const j = JSON.parse(xhr.responseText);
-    S.job = j.id;
-    history.replaceState(null, '', '#job=' + j.id);
-    poll();
-  };
-  xhr.onerror = () => showEmpty('Upload failed. Check your connection and try again.');
-  xhr.open('POST', '/api/upload'); xhr.send(fd);
-  hint('Uploading\u2026');
+  startReading();
 }
-async function resume(){
-  const p = new URLSearchParams(location.hash.slice(1));
-  const jid = p.get('job'), v = p.get('v');
-  if (!jid) return;
-  const r = await fetch('/api/jobs/' + jid).catch(() => null);
-  if (!r || !r.ok){ if (v) return startYouTube('https://youtu.be/' + v); return; }
-  const j = await r.json();
-  S.job = jid; S.source = j.source; S.videoId = j.video_id;
-  $('#empty').hidden = true;
-  if (j.source === 'youtube') showYouTube(j.video_id);
-  else { video.src = '/api/jobs/' + jid + '/video'; video.hidden = false; }
-  poll();
+function startReading(region = S.manual ? S.region : null){
+  clearReading();
+  const token = S.reading = {};
+  S.stop = readVideo(S.src, { file: S.file, region, orientation: $('#orient').value, on: u => { if (S.reading === token) update(u); } });
+}
+function resume(){
+  const v = new URLSearchParams(location.hash.slice(1)).get('v');
+  if (v) startYouTube('https://youtu.be/' + v);
 }
 
-/* polling the server for new positions */
-const ERRORS = {
-  no_board: 'Couldn\u2019t find a chessboard in this video. Press Fix board area and draw it.',
-  youtube_blocked: 'YouTube refused to let the server download this video (see the README about cookies).',
-  too_long: 'This video is longer than the server allows.',
-  download_failed: 'The server couldn\u2019t download this video.',
-};
-async function poll(){
-  clearTimeout(S.pollTimer);
-  if (!S.job) return;
-  const jid = S.job;
-  let j;
-  try {
-    const r = await fetch(`/api/jobs/${jid}?since=${S.events.length}&msince=${S.marks.length}`);
-    if (r.status === 404) return showEmpty('The server restarted and forgot this video. Load it again.');
-    j = await r.json();
-  } catch (e) { S.pollTimer = setTimeout(poll, 3000); return; }
-  if (jid !== S.job) return;
-  if (S.gen !== null && j.gen !== S.gen){ S.gen = j.gen; S.events = []; S.idx = -2; S.marks = []; S.markIdx = -2; return poll(); }
-  S.gen = j.gen;
-  for (const [list, add] of [[S.events, j.events], [S.marks, j.marks || []]]){
+/* what the reader (or a saved reading) reports */
+function update(u){
+  for (const [list, add] of [[S.events, u.events || []], [S.marks, u.marks || []]]){
     for (const e of add){
       const prevT = list.length ? list[list.length - 1].t : 0;
       list.push({ ...e, t: Math.max(e.t, prevT) });
     }
   }
-  const hadRegion = !!S.region;
-  S.region = j.region; S.W = j.width || S.W; S.H = j.height || S.H; S.duration = j.duration || S.duration;
-  S.progress = j.progress || 0; S.status = j.status; S.statusError = j.error;
-  if (!hadRegion && S.region) layoutPlayer();
-  if (j.orientation && $('#orient').value !== j.orientation) $('#orient').value = j.orientation;
-  if (j.white_bottom != null && j.white_bottom !== S.whiteBottom){ S.whiteBottom = j.white_bottom; faceSide(j.white_bottom); }
-  if (j.white_bottom != null && j.orientation === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (j.white_bottom ? 'White' : 'Black') + ' at bottom)';
-  $('#progress').style.width = (j.status === 'downloading' ? 100 * (j.download || 0) : 100 * S.progress) + '%';
+  if (u.status) S.status = u.status;
+  if (u.status) S.error = u.status === 'error' ? u.error : null;
+  if (u.progress != null) S.progress = u.progress;
+  if (u.width){ S.W = u.width; S.H = u.height; S.duration = u.duration; }
+  if (u.region){
+    const had = !!S.region;
+    S.region = u.region;
+    if (!had) layoutPlayer(); else drawOverlay();
+  }
+  if (u.whiteBottom != null && u.whiteBottom !== S.whiteBottom){ S.whiteBottom = u.whiteBottom; faceSide(u.whiteBottom); }
+  if (u.whiteBottom != null && $('#orient').value === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (u.whiteBottom ? 'White' : 'Black') + ' at bottom)';
+  $('#progress').style.width = (S.status === 'downloading' ? 100 * S.download : 100 * S.progress) + '%';
   updateButtons();
   statusHint();
-  if (j.status === 'done' || j.status === 'error') return;
-  S.pollTimer = setTimeout(poll, 1000);
+  if (S.status === 'done') saveReading();
 }
+/* share a finished reading of a YouTube video, so the next viewer of it can skip the work;
+   only the automatic one: a board drawn by hand fits this viewer's needs, maybe not theirs */
+function saveReading(){
+  if (S.saved || S.source !== 'youtube' || S.manual || $('#orient').value !== 'auto') return;
+  S.saved = true;
+  const body = { events: S.events, marks: S.marks, region: S.region, width: S.W, height: S.H, duration: S.duration, white_bottom: S.whiteBottom };
+  fetch(`/api/videos/${S.videoId}/results`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+}
+
+const ERRORS = {
+  no_board: 'Couldn\u2019t find a chessboard in this video. Press Fix board area and draw it.',
+  youtube_blocked: 'YouTube refused to let the server download this video (see the README about cookies).',
+  too_long: 'This video is longer than the server allows.',
+  download_failed: 'The server couldn\u2019t download this video.',
+  unplayable: 'This browser can\u2019t open that video file.',
+  worker_failed: 'Couldn\u2019t load the board reader. Check your connection and reload the page.',
+};
 function statusHint(){
   if (S.fixing) return;
   const moves = S.events.filter(e => e.san).length;
   switch (S.status){
-    case 'queued': return hint('Waiting for the server\u2026');
-    case 'downloading': return hint('The server is fetching the video\u2026');
+    case 'downloading': return hint(`The server is fetching the video\u2026 ${Math.round(100 * S.download)}%`);
+    case 'loading': return hint('Opening the video\u2026');
     case 'finding_board': return hint('Looking for the chessboard\u2026');
     case 'processing': {
       const done = S.progress * S.duration;
       return hint(`Reading moves: ${mmss(done)} of ${mmss(S.duration)} analyzed. You can press play now.`);
     }
     case 'done': return hint(moves ? `Ready. ${moves} move${moves > 1 ? 's' : ''} found.` : 'Ready.');
-    case 'error': return hint(ERRORS[S.statusError] || 'Something went wrong while reading this video.', true);
+    case 'error': return hint(ERRORS[S.error] || 'Something went wrong while reading this video.', true);
   }
 }
 
@@ -719,7 +748,7 @@ function highlight(ev){
   dirty = true;
 }
 setInterval(() => {
-  if (!S.job) return;
+  if (!S.source) return;
   const t = playerTime() + 0.1;
   const i = indexAt(S.events, t);
   if (i !== S.idx){
@@ -799,15 +828,30 @@ function drawOverlay(){
   octx.strokeRect(r.x, r.y, r.w, r.h);
 }
 async function startFix(){
-  if (!S.job || S.fixing) return endFix(true);
+  if (!S.src || S.fixing) return endFix(true);
   pausePlayer(); setCrop(false);
   S.fixing = true;
   card.classList.add('expanded'); stage.classList.add('drawing');
   $('#fixBtn').setAttribute('aria-pressed', 'true');
-  still.src = `/api/jobs/${S.job}/frame.jpg?t=${playerTime().toFixed(2)}`;
-  still.hidden = false;
   hint('Drag a box around the board\u2019s 8\u00d78 squares.');
   drawOverlay();
+  // show the frame being watched, from a hidden copy of the video
+  const src = S.src;
+  try {
+    if (!S.stillVideo){
+      const v = await openVideo(src);
+      if (S.src !== src || S.stillVideo){ closeVideo(v); return; }
+      S.stillVideo = v;
+    }
+    const v = S.stillVideo;
+    await seek(v, playerTime());
+    if (!S.fixing || S.src !== src) return;
+    S.W = v.videoWidth; S.H = v.videoHeight;
+    still.width = S.W; still.height = S.H;
+    still.getContext('2d').drawImage(v, 0, 0);
+    still.hidden = false;
+    drawOverlay();
+  } catch (e) {}
 }
 function endFix(silent){
   S.fixing = false; dragBox = dragStart = null;
@@ -837,35 +881,35 @@ overlay.addEventListener('pointerup', async () => {
   dragStart = null; dragBox = null;
   if (!d || d.w < 20 || d.h < 20 || !cb){ drawOverlay(); return; }
   const box = { x: Math.max(0, (d.x - cb.x) / cb.s), y: Math.max(0, (d.y - cb.y) / cb.s), w: d.w / cb.s, h: d.h / cb.s };
-  S.region = [box.x, box.y, box.w, box.h];
+  S.region = [box.x, box.y, box.w, box.h]; S.manual = true;
   endFix(true);
-  await restartWith(box);
+  restart(S.region);
 });
-async function restartWith(body){
-  if (!S.job) return;
-  clearTimeout(S.pollTimer);
-  S.events = []; S.idx = -2; S.whiteBottom = null; S.marks = []; S.markIdx = -2;
-  hint('Reading the video again with the new settings\u2026');
-  const r = await fetch(`/api/jobs/${S.job}/board`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
-  const j = r && r.ok ? await r.json().catch(() => null) : null;
-  // a poll that was already in flight may have added the old run's positions; drop them
-  clearTimeout(S.pollTimer);
-  S.events = []; S.idx = -2; S.whiteBottom = null; S.marks = []; S.markIdx = -2;
-  S.gen = j ? j.gen : null;
-  poll();
+/* read the video again with new settings (once it's here: until then they just wait) */
+function restart(region){
+  if (!S.source) return;
+  if (S.src){
+    hint('Reading the video again with the new settings\u2026');
+    startReading(region);
+  } else {
+    clearReading();
+    S.status = 'downloading';
+    statusHint();
+    pollDownload();
+  }
 }
 
 /* buttons and menu */
 function updateButtons(){
   $('#cropBtn').disabled = !S.region;
-  $('#fixBtn').disabled = !S.job || !['processing', 'done', 'error'].includes(S.status);
+  $('#fixBtn').disabled = !S.src || !['processing', 'done', 'error'].includes(S.status);
 }
 $('#urlForm').addEventListener('submit', e => { e.preventDefault(); startYouTube($('#ytUrl').value.trim()); });
 $('#fileBtn').onclick = () => $('#fileInput').click();
 $('#fileInput').onchange = e => { const f = e.target.files && e.target.files[0]; if (f) startUpload(f); e.target.value = ''; };
 $('#newBtn').onclick = () => showEmpty();
-$('#orient').onchange = e => restartWith(S.region ? { x: S.region[0], y: S.region[1], w: S.region[2], h: S.region[3], orientation: e.target.value } : { auto: true, orientation: e.target.value });
-$('#autoBtn').onclick = () => { S.region = null; setCrop(false); restartWith({ auto: true, orientation: $('#orient').value }); };
+$('#orient').onchange = () => { $('#orient').options[0].textContent = 'Detect'; restart(S.region); };
+$('#autoBtn').onclick = () => { S.region = null; S.manual = false; setCrop(false); restart(null); };
 function setShowMarks(on){
   S.showMarks = on; marksGroup.visible = on; dirty = true;
   $('#marksBtn').setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -907,7 +951,6 @@ requestAnimationFrame(loop);
 updateButtons();
 resume();
 window.__sb = { S, playerTime };
-})();
 </script>
 </body>
 </html>
