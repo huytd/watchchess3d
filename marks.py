@@ -221,6 +221,19 @@ def find_arrows(mask, wide):
         if cand[keep[passed[a, b]]][2] is None and any(
                 (a, m) in passed and (m, b) in passed for m in starts if _between(a, m, b)):
             passed.pop((a, b))
+    # the legs of an L-shaped arrow pass as arrows of their own (nothing is behind the
+    # corner along the last leg, the corner reads as a small head): they are part of the L.
+    # An L along a leg of a better one is made of that L and whatever carries on from it
+    used = set()
+    for i in sorted((i for i in passed.values() if cand[keep[i]][2] is not None), key=lambda i: -t['sharp'][i]):
+        a, b, m = cand[keep[i]][:3]
+        legs = {frozenset((a, m)), frozenset((m, b))}
+        if legs & used:
+            passed.pop((a, b))
+            continue
+        used |= legs
+        for leg in ((a, m), (m, a), (m, b), (b, m)):
+            passed.pop(leg, None)
     # a thick arrow also passes for its near neighbours (a1-b7 for a2-b7, the legs of an L):
     # take the best-aligned, longest first and drop whatever mostly runs along it
     order = sorted(passed.values(), key=lambda i: (-round(t['sharp'][i], 2), -len(cand[keep[i]][3]),
