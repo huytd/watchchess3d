@@ -746,6 +746,16 @@ function faceSide(whiteBottom){
   const want = whiteBottom ? 0 : Math.PI;
   turnTo(orbit.az + Math.atan2(Math.sin(want - orbit.az), Math.cos(want - orbit.az)));
 }
+/* which way up the video's board is can change from game to game, so follow the position on
+   show (before the first one, the first game's) and turn when a game is played from the other side */
+function faceVideo(){
+  const ev = S.events[Math.max(S.idx, 0)];
+  const wb = ev && ev.wb != null ? ev.wb : S.whiteBottom;
+  if (wb == null || wb === S.viewWb) return;
+  S.viewWb = wb;
+  faceSide(wb);
+  if ($('#orient').value === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (wb ? 'White' : 'Black') + ' at bottom)';
+}
 
 function resize3D(){
   const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
@@ -837,7 +847,7 @@ async function showYouTube(id){
 function stopReading(){ S.reading = null; if (S.stop){ S.stop(); S.stop = null; } }
 function clearReading(){
   stopReading();
-  Object.assign(S, { events: [], idx: -2, marks: [], markIdx: -2, whiteBottom: null, progress: 0, saved: false });
+  Object.assign(S, { events: [], idx: -2, marks: [], markIdx: -2, whiteBottom: null, viewWb: null, progress: 0, saved: false });
 }
 function resetAll(){
   clearTimeout(S.pollTimer);
@@ -878,7 +888,9 @@ async function startYouTube(url){
   // someone has read this video before: use their reading, no work to do
   if (j.results){
     const res = await fetch(`/api/videos/${j.video_id}/results`).then(x => x.ok ? x.json() : null).catch(() => null);
-    if (res && S.videoId === j.video_id){
+    // readings saved before positions carried their orientation (version 2) may have a game
+    // the wrong way up: read those again
+    if (res && res.version >= 2 && S.videoId === j.video_id){
       S.saved = true;
       update({ status: 'done', region: res.region, width: res.width, height: res.height, duration: res.duration,
         progress: 1, events: res.events, marks: res.marks, whiteBottom: res.white_bottom });
@@ -945,8 +957,8 @@ function update(u){
     S.region = u.region;
     if (!had) layoutPlayer(); else drawOverlay();
   }
-  if (u.whiteBottom != null && u.whiteBottom !== S.whiteBottom){ S.whiteBottom = u.whiteBottom; faceSide(u.whiteBottom); }
-  if (u.whiteBottom != null && $('#orient').value === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (u.whiteBottom ? 'White' : 'Black') + ' at bottom)';
+  if (u.whiteBottom != null) S.whiteBottom = u.whiteBottom;
+  faceVideo();
   $('#progress').style.width = (S.status === 'downloading' ? 100 * S.download : 100 * S.progress) + '%';
   $('#progress').parentElement.classList.toggle('done', S.status === 'done' || S.status === 'error');
   updateButtons();
@@ -958,7 +970,7 @@ function update(u){
 function saveReading(){
   if (S.saved || S.source !== 'youtube' || S.manual || $('#orient').value !== 'auto') return;
   S.saved = true;
-  const body = { events: S.events, marks: S.marks, region: S.region, width: S.W, height: S.H, duration: S.duration, white_bottom: S.whiteBottom };
+  const body = { version: 2, events: S.events, marks: S.marks, region: S.region, width: S.W, height: S.H, duration: S.duration, white_bottom: S.whiteBottom };
   fetch(`/api/videos/${S.videoId}/results`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
 }
 
@@ -1013,6 +1025,7 @@ setInterval(() => {
     highlight(ev);
     $('#lichessBtn').href = 'https://lichess.org/analysis/standard/' + S.fen.replace(/ /g, '_');
   }
+  faceVideo();
   const mi = indexAt(S.marks, t);
   if (mi !== S.markIdx){ S.markIdx = mi; drawMarks(mi >= 0 ? S.marks[mi] : null); }
   if (S.status === 'processing' && !S.fixing){

@@ -48,7 +48,16 @@ you open never leave your device.
   centres, so it tests every possible arrow (plus chess.com's L-shaped knight arrows) against a
   mask of strongly coloured pixels. A mark must hold for two readings to show and be gone for two
   to disappear. This is a line-by-line port of the Python pipeline the server used to run, and
-  gives the same moves and marks on the same frames.
+  gives the same moves and marks on the same frames, apart from deciding which way up the board
+  is (below), which the Python version did once for the whole video.
+- Which way up the board is: chess.com and Lichess put the player's colour at the bottom, so a
+  video with several games can show some from White's side and some from Black's. The reader
+  settles it per game from the starting position (two readings in a row with 16 pieces of one
+  colour on the top two rows and 16 of the other on the bottom two), and reads the board that way
+  up until a game starts the other way round. Before the first game start (a video that joins a
+  game in progress), it goes by the pawns, which can't pass each other on a file, and by where
+  the pieces stand. Every position records which way up it was read, and the 3D board turns to
+  match as playback reaches each game. Readings saved before this (no `version: 2`) are read again.
 - `static/cnn.js`: the square classifier (`static/model.json`), run with TensorFlow.js on the
   GPU (WebGL) or with WebAssembly, whichever is faster on the device.
 - `static/index.html`: the page (3D board + YouTube's embedded player).

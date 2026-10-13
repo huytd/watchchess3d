@@ -157,6 +157,7 @@ class Results(BaseModel):
     height: int
     duration: float
     white_bottom: Optional[bool] = None
+    version: int = 1
 
 
 @app.put('/api/videos/{vid}/results')

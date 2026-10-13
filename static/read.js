@@ -105,7 +105,7 @@ const remote = {
   search: img => send('search', img),
   refine: (img, box) => send('refine', img, { box }),
   orient: crops => call('orient', { crops }, crops.map(c => c.data.buffer)),
-  start: (whiteBottom, decided) => call('start', { whiteBottom, decided }),
+  start: (whiteBottom, decided, fixed) => call('start', { whiteBottom, decided, fixed }),
   frame: (t, img) => send('frame', img, { t }),
 };
 

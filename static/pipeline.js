@@ -4,7 +4,7 @@
 
    source: { width, height, duration, frameAt(t, area) -> RGBA pixels {w, h, data},
              scan(area, fps, onFrame(t, pixels) -> Promise, live) }
-   ops:    { search(img), refine(img, box), orient(crops), start(whiteBottom, decided), frame(t, img) }
+   ops:    { search(img), refine(img, box), orient(crops), start(whiteBottom, decided, fixed), frame(t, img) }
    report(update) gets the status, the board area and the positions as they are found;
    live() throws when the reading has been called off. */
 import { FPS, pickBoard } from './engine.js';
@@ -36,7 +36,7 @@ export async function readSource(source, ops, { region = null, orientation = 'au
     const r = await ops.orient(crops); live();
     if (r !== null){ whiteBottom = r; decided = true; }
   }
-  await ops.start(whiteBottom, decided); live();
+  await ops.start(whiteBottom, decided, orientation !== 'auto'); live();
   await source.scan(crop, FPS, (t, img) => ops.frame(t, img).then(r => report({
     events: r.events, marks: r.marks, whiteBottom: r.decided ? r.whiteBottom : null,
     progress: Math.min(1, (t + 1 / FPS) / Math.max(duration, 1e-6)),
