@@ -57,6 +57,9 @@ you open never leave your device.
   `tools/make_pieces.py`. Simple built-in pieces show until it has loaded. Both sides share one
   light colour map that the page tints, so the colours of the pieces and the board can be changed
   under ⋯ › Board colours / Piece colours (presets or any colour; remembered in the browser).
+  Ticking Wood turns the chosen colours into wood of that tone: the board lays a neutral grain
+  (`static/wood.jpg`, from Poly Haven's [Cherry Veneer](https://polyhaven.com/a/cherry_veneer), CC0)
+  over each square, and the pieces get turned-wood grain drawn in the shader.
 
 Speed depends on the device. Without a GPU (WebAssembly on 4 CPU cores) a 71-second test video
 took about 15 seconds, so roughly 2.5 minutes for 20 minutes of video; you can watch from the

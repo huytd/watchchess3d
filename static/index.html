@@ -110,6 +110,7 @@ img,video,canvas{max-width:none}
 .menu hr{border:0; border-top:1px solid var(--line); margin:4px 6px}
 .menu .swatches{display:flex; gap:6px; padding:0 10px 6px}
 .menu .swatches label{flex:1; flex-direction:row; align-items:center; gap:6px; padding:0; color:var(--ink); font-size:13px}
+.menu input[type="checkbox"]{margin:0; accent-color:var(--accent)}
 .menu input[type="color"]{width:30px; height:26px; padding:2px; border:1px solid var(--line); border-radius:6px; background:var(--bg); cursor:pointer}
 
 @media (max-width:700px){
@@ -176,6 +177,7 @@ img,video,canvas{max-width:none}
     <div class="swatches">
       <label><input type="color" id="boardLight" aria-label="Light squares"> Light</label>
       <label><input type="color" id="boardDark" aria-label="Dark squares"> Dark</label>
+      <label><input type="checkbox" id="boardWood"> Wood</label>
     </div>
     <label>Piece colours
       <select id="pieceTheme"></select>
@@ -183,6 +185,7 @@ img,video,canvas{max-width:none}
     <div class="swatches">
       <label><input type="color" id="pieceWhite" aria-label="White pieces"> White</label>
       <label><input type="color" id="pieceBlack" aria-label="Black pieces"> Black</label>
+      <label><input type="checkbox" id="pieceWood"> Wood</label>
     </div>
     <hr>
     <button id="copyBtn">Copy FEN</button>
@@ -260,15 +263,39 @@ function canvasTex(size, draw){
   return t;
 }
 /* the board's colours can be changed (⋯ › Board colours), so its textures are redrawn on demand;
-   the frame is a deep shade of the dark squares */
-const boardColours = { light: '#d9cdae', dark: '#56744f' };
+   the frame is a deep shade of the dark squares. Wood lays a neutral grain (static/wood.jpg, from
+   Poly Haven's Cherry Veneer, CC0) over each colour with soft-light, so any tone becomes that wood. */
+const boardColours = { light: '#d9cdae', dark: '#56744f', wood: false };
 const frameColour = () => '#' + new THREE.Color(boardColours.dark).lerp(new THREE.Color(0x0c0f0d), 0.72).getHexString();
+const woodImg = new Image();
+let woodPattern = null;
+function woodReady(){
+  if (woodPattern) return true;
+  if (!woodImg.src){ woodImg.onload = () => paintBoard(boardColours.light, boardColours.dark, boardColours.wood); woodImg.src = 'wood.jpg'; }
+  if (!woodImg.complete || !woodImg.naturalWidth) return false;
+  woodPattern = document.createElement('canvas').getContext('2d').createPattern(woodImg, 'repeat');
+  return true;
+}
+/* grain over a rectangle, turned by rot and shifted by (ox, oy) so neighbouring pieces of wood differ */
+function grain(g, x, y, w, h, rot, ox, oy){
+  const k = 0.7, r = Math.hypot(w, h) / k;
+  g.save();
+  g.beginPath(); g.rect(x, y, w, h); g.clip();
+  g.translate(x + w / 2, y + h / 2); g.rotate(rot); g.scale(k, k); g.translate(ox, oy);
+  g.globalCompositeOperation = 'soft-light';
+  g.fillStyle = woodPattern; g.fillRect(-ox - r, -oy - r, 2 * r, 2 * r);
+  g.restore();
+}
 function drawBoard(g, n){
-  const q = n / 8;
+  const q = n / 8, wood = boardColours.wood && woodReady();
+  let seed = 11;
+  const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647 * 512;
   for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++){
     g.fillStyle = (r + f) % 2 === 0 ? boardColours.light : boardColours.dark;
     g.fillRect(f * q, r * q, q, q);
+    if (wood) grain(g, f * q, r * q, q, q, 0, rnd(), rnd());
   }
+  if (wood) return;
   // faint vinyl grain
   const img = g.getImageData(0, 0, n, n), d = img.data;
   for (let i = 0; i < d.length; i += 4){ const k = (Math.random() - 0.5) * 7; d[i] += k; d[i + 1] += k; d[i + 2] += k; }
@@ -277,6 +304,11 @@ function drawBoard(g, n){
 function drawFrame(g, n){
   g.fillStyle = frameColour(); g.fillRect(0, 0, n, n);
   const u = n / 9.2, off = 0.6 * u;
+  if (boardColours.wood && woodReady()){
+    // grain runs along each side of the frame
+    grain(g, 0, 0, n, off, 0, 40, 0); grain(g, 0, n - off, n, off, 0, 300, 0);
+    grain(g, 0, off, off, n - 2 * off, Math.PI / 2, 150, 0); grain(g, n - off, off, off, n - 2 * off, Math.PI / 2, 420, 0);
+  }
   g.fillStyle = '#cfa95f';
   g.font = `600 ${u * 0.3}px "Instrument Sans", system-ui, sans-serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -291,8 +323,8 @@ function drawFrame(g, n){
 }
 const boardTex = canvasTex(1024, drawBoard), frameTex = canvasTex(1152, drawFrame);
 const frameSide = new THREE.MeshStandardMaterial({ roughness: 0.6 });
-function paintBoard(light, dark){
-  Object.assign(boardColours, { light, dark });
+function paintBoard(light, dark, wood){
+  Object.assign(boardColours, { light, dark, wood });
   for (const [tex, draw] of [[boardTex, drawBoard], [frameTex, drawFrame]]){
     draw(tex.image.getContext('2d'), tex.image.width);
     tex.needsUpdate = true;
@@ -448,18 +480,49 @@ const MAT = {
 const MODEL = {}, MODEL_SCALE = 16, MODEL_MAT = {};
 /* both sides of the model share one light colour map, tinted with the chosen colour (⋯ › Piece colours) */
 const pieceColours = { w: '#ffffff', b: '#3e3b35' };
-function paintPieces(w, b){
+const pieceWood = { value: 0 };
+function paintPieces(w, b, wood){
   Object.assign(pieceColours, { w, b });
+  pieceWood.value = wood ? 1 : 0;
   for (const c of 'wb'){
     if (MODEL_MAT[c]) MODEL_MAT[c].color.set(pieceColours[c]).convertSRGBToLinear();
     MAT[c].color.set(pieceColours[c]).convertSRGBToLinear();
   }
   dirty = true;
 }
+/* wood for the pieces is drawn in the shader: long grain, as if each piece were turned from a blank
+   cut off-centre from a log, so the growth rings sweep up the piece as gently wavy stripes */
+function addWoodGrain(mat){
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uWood = pieceWood;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWoodPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWoodPos = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vWoodPos;
+uniform float uWood;
+float woodHash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float woodNoise(vec3 x){
+  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(woodHash(i), woodHash(i + vec3(1, 0, 0)), f.x), mix(woodHash(i + vec3(0, 1, 0)), woodHash(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(woodHash(i + vec3(0, 0, 1)), woodHash(i + vec3(1, 0, 1)), f.x), mix(woodHash(i + vec3(0, 1, 1)), woodHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+if (uWood > 0.5){
+  vec3 p = vWoodPos * 100.0; // the model is in metres, so a piece is about 4 units across
+  float ring = fract(1.4 * (length(p.xz - vec2(9.0, -6.0)) + 1.6 * woodNoise(p * vec3(0.35, 0.04, 0.35))));
+  float late = smoothstep(0.55, 0.9, ring) * (1.0 - smoothstep(0.9, 1.0, ring));
+  float fibre = woodNoise(p * vec3(6.0, 0.25, 6.0));
+  diffuseColor.rgb *= (1.06 - 0.32 * late) * (0.93 + 0.1 * fibre);
+}`);
+  };
+}
 if (THREE.GLTFLoader) new THREE.GLTFLoader().load('pieces.glb', gltf => {
   for (const o of gltf.scene.children) MODEL[o.name] = o;
   gltf.scene.traverse(o => { if (o.isMesh) MODEL_MAT[o.material.name === 'black' ? 'b' : 'w'] = o.material; });
-  paintPieces(pieceColours.w, pieceColours.b);
+  for (const c of 'wb') addWoodGrain(MODEL_MAT[c]);
+  paintPieces(pieceColours.w, pieceColours.b, pieceWood.value);
   for (const g of view.meshes) if (g) fillPiece(g, g.userData.ch);
   dirty = true;
 }, undefined, err => console.warn('pieces.glb', err));
@@ -988,24 +1051,27 @@ try { if (localStorage.getItem('shadowboard.marks') === '0') setShowMarks(false)
 /* colours of the board and pieces, kept in this browser */
 const THEMES = {
   board: [['Green', '#d9cdae', '#56744f'], ['Brown', '#f0d9b5', '#b58863'], ['Blue', '#dee3e6', '#8ca2ad'],
-    ['Grey', '#e4e4e0', '#8f938e'], ['Coral', '#f3e7d9', '#c97b63'], ['Purple', '#e9e2f0', '#8a74a8']],
-  pieces: [['Ivory and ebony', '#ffffff', '#3e3b35'], ['Boxwood and rosewood', '#f2d3a6', '#6e3a24'],
-    ['Cream and red', '#fff3dc', '#a8352c'], ['Cream and blue', '#fff3dc', '#2f4f86'], ['Silver and gold', '#d6dade', '#c9a23e']],
+    ['Grey', '#e4e4e0', '#8f938e'], ['Coral', '#f3e7d9', '#c97b63'], ['Purple', '#e9e2f0', '#8a74a8'],
+    ['Maple and walnut', '#ecd3a6', '#8b5a34', true], ['Oak', '#e6c99c', '#b07f4c', true],
+    ['Rosewood', '#e8c69c', '#6b3424', true], ['Grey wood', '#dedad2', '#7a7369', true]],
+  pieces: [['Ivory and ebony', '#ffffff', '#3e3b35'], ['Boxwood and rosewood', '#ffd9a3', '#6e3a24', true],
+    ['Maple and walnut', '#ffe6b8', '#5a3820', true], ['Cream and red', '#fff3dc', '#a8352c'],
+    ['Cream and blue', '#fff3dc', '#2f4f86'], ['Silver and gold', '#d6dade', '#c9a23e']],
 };
 const COLOUR_UI = {
-  board: { select: '#boardTheme', inputs: ['#boardLight', '#boardDark'], paint: paintBoard },
-  pieces: { select: '#pieceTheme', inputs: ['#pieceWhite', '#pieceBlack'], paint: paintPieces },
+  board: { select: '#boardTheme', inputs: ['#boardLight', '#boardDark'], wood: '#boardWood', paint: paintBoard },
+  pieces: { select: '#pieceTheme', inputs: ['#pieceWhite', '#pieceBlack'], wood: '#pieceWood', paint: paintPieces },
 };
 let colourPrefs = {};
 try { colourPrefs = JSON.parse(localStorage.getItem('shadowboard.colours')) || {}; } catch (e) {}
-function setColours(kind, a, b, save){
+function setColours(kind, a, b, wood, save){
   const ui = COLOUR_UI[kind];
-  ui.paint(a, b);
-  $(ui.inputs[0]).value = a; $(ui.inputs[1]).value = b;
-  const i = THEMES[kind].findIndex(([, x, y]) => x === a && y === b);
+  ui.paint(a, b, wood);
+  $(ui.inputs[0]).value = a; $(ui.inputs[1]).value = b; $(ui.wood).checked = wood;
+  const i = THEMES[kind].findIndex(([, x, y, w = false]) => x === a && y === b && w === wood);
   $(ui.select).value = i >= 0 ? String(i) : 'custom';
   if (save){
-    colourPrefs[kind] = [a, b];
+    colourPrefs[kind] = [a, b, wood];
     try { localStorage.setItem('shadowboard.colours', JSON.stringify(colourPrefs)); } catch (e) {}
   }
 }
@@ -1013,11 +1079,12 @@ for (const [kind, ui] of Object.entries(COLOUR_UI)){
   const sel = $(ui.select);
   THEMES[kind].forEach(([name], i) => sel.add(new Option(name, String(i))));
   sel.add(new Option('Custom', 'custom'));
-  sel.onchange = () => { const t = THEMES[kind][+sel.value]; if (t) setColours(kind, t[1], t[2], true); };
-  for (const inp of ui.inputs) $(inp).addEventListener('input', () => setColours(kind, $(ui.inputs[0]).value, $(ui.inputs[1]).value, true));
-  const saved = colourPrefs[kind], valid = Array.isArray(saved) && saved.every(c => /^#[0-9a-f]{6}$/i.test(c));
+  sel.onchange = () => { const t = THEMES[kind][+sel.value]; if (t) setColours(kind, t[1], t[2], !!t[3], true); };
+  const changed = () => setColours(kind, $(ui.inputs[0]).value, $(ui.inputs[1]).value, $(ui.wood).checked, true);
+  for (const el of [...ui.inputs, ui.wood]) $(el).addEventListener('input', changed);
+  const saved = colourPrefs[kind], valid = Array.isArray(saved) && /^#[0-9a-f]{6}$/i.test(saved[0]) && /^#[0-9a-f]{6}$/i.test(saved[1]);
   const [, a, b] = THEMES[kind][0];
-  setColours(kind, valid ? saved[0] : a, valid ? saved[1] : b, false);
+  setColours(kind, valid ? saved[0] : a, valid ? saved[1] : b, valid && saved[2] === true, false);
 }
 $('#copyBtn').onclick = async () => {
   try { await navigator.clipboard.writeText(S.fen); hint('FEN copied.'); } catch (e) { hint(S.fen); }
