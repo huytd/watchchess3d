@@ -1,12 +1,10 @@
-# fly.toml app configuration file generated for watchchess3d on 2026-10-13T03:18:34Z
+# fly.toml app configuration file generated for watchchess3d on 2026-10-12T20:31:57-07:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
 app = 'watchchess3d'
 primary_region = 'ams'
-
-[build]
 
 [[mounts]]
   source = 'data'
@@ -21,7 +19,6 @@ primary_region = 'ams'
   processes = ['app']
 
 [[vm]]
-  memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
+  memory = '512mb'
