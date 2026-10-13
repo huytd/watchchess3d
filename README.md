@@ -60,6 +60,9 @@ you open never leave your device.
   Ticking Wood turns the chosen colours into wood of that tone: the board lays a neutral grain
   (`static/wood.jpg`, from Poly Haven's [Cherry Veneer](https://polyhaven.com/a/cherry_veneer), CC0)
   over each square, and the pieces get turned-wood grain drawn in the shader.
+- `static/table/`: what the board stands on (⋯ › Table: walnut by default, oak planks, leather,
+  green baize, linen, or none), from Poly Haven's CC0 Wood Table 001, Wood Table, Brown Leather,
+  Velour Velvet and Rough Linen. The table fades into a dim room with fog, under a soft vignette.
 
 Speed depends on the device. Without a GPU (WebAssembly on 4 CPU cores) a 71-second test video
 took about 15 seconds, so roughly 2.5 minutes for 20 minutes of video; you can watch from the
