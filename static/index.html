@@ -7,7 +7,7 @@
 <title>Shadowboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 
 :root{
@@ -46,6 +46,29 @@ img,video,canvas{max-width:none}
   background:radial-gradient(ellipse 75% 70% at 50% 45%, transparent 45%, rgba(0,0,0,0.38) 100%)}
 .scene canvas{display:block; width:100%; height:100%; touch-action:none; cursor:grab}
 .scene canvas:active{cursor:grabbing}
+
+/* camera controls, top right */
+.camera{
+  position:fixed; z-index:2; top:calc(16px + env(safe-area-inset-top,0px)); right:calc(16px + env(safe-area-inset-right,0px));
+  display:flex; align-items:center; gap:2px; padding:4px; border-radius:999px;
+  background:rgba(12,16,14,0.6); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px); box-shadow:0 4px 14px rgba(0,0,0,0.25);
+}
+.cam{
+  position:relative; flex:none; width:34px; height:34px; display:grid; place-items:center; padding:0; margin:0;
+  border:0; border-radius:50%; cursor:pointer; color:var(--stage-ink); background:transparent; transition:background .15s ease;
+}
+.cam svg{width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round}
+.cam:hover{background:rgba(255,255,255,0.12)}
+.cam[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink)}
+.cam-sep{flex:none; width:1px; height:20px; margin:0 3px; background:rgba(255,255,255,0.2)}
+@media (hover:hover){
+  .cam::after{
+    content:attr(data-tip); position:absolute; top:calc(100% + 10px); right:0; white-space:nowrap; pointer-events:none;
+    font-size:12px; font-weight:500; padding:4px 8px; border-radius:8px; color:var(--stage-ink); background:rgba(12,16,14,0.85);
+    opacity:0; transition:opacity .15s ease;
+  }
+  .cam:hover::after, .cam:focus-visible::after{opacity:1}
+}
 
 /* floating video card, bottom left */
 .card{
@@ -152,6 +175,9 @@ img,video,canvas{max-width:none}
   }
   .card.cropped{width:min(72vw, 300px); right:auto}
   .tools{--tool:40px}
+  .camera{top:calc(8px + env(safe-area-inset-top,0px)); right:calc(8px + env(safe-area-inset-right,0px)); padding:3px}
+  .cam{width:32px; height:32px}
+  .cam-sep{margin:0 2px}
   /* 16px stops iOS zooming into a field when it gets focus */
   .empty input, .menu select{font-size:16px}
 }
@@ -190,6 +216,18 @@ img,video,canvas{max-width:none}
 </head>
 <body>
 <div class="scene" id="scene" aria-label="3D chess board. Drag to rotate, pinch or scroll to zoom."></div>
+
+<nav class="camera" id="camBar" aria-label="Camera">
+  <button class="cam" id="swayBtn" aria-pressed="false" data-tip="Auto-rotate" aria-label="Auto-rotate"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 15.6c2.4-.8 4-2.1 4-3.6 0-2.5-4-4.5-9-4.5S3 9.5 3 12s4 4.5 9 4.5"/><path d="m9.5 14 2.5 2.5L9.5 19"/></svg></button>
+  <span class="cam-sep" aria-hidden="true"></span>
+  <button class="cam" data-view="overview" aria-pressed="false" data-tip="Overview" aria-label="Overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6h10l4 12H3z"/><path d="M5 12h14M10.3 6l-1 12M13.7 6l1 12"/></svg></button>
+  <button class="cam" data-view="top" aria-pressed="false" data-tip="Top down" aria-label="Top down"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 12h16M12 4v16"/></svg></button>
+  <button class="cam" data-view="player" aria-pressed="false" data-tip="Player's eye" aria-label="Player's eye view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+  <button class="cam" data-view="side" aria-pressed="false" data-tip="From the side" aria-label="View from the side"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 19h20"/><path d="M5 19v-3h4v3M15 19v-7h4v7"/><path d="M15 12V9.5M19 12V9.5"/><circle cx="7" cy="13.5" r="1.5"/></svg></button>
+  <button class="cam" data-view="table" aria-pressed="false" data-tip="Whole table" aria-label="Whole table"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/><rect x="8.5" y="8.5" width="7" height="7" rx="1"/></svg></button>
+  <span class="cam-sep" aria-hidden="true"></span>
+  <button class="cam" id="camFlip" data-tip="Other side" aria-label="View from the other side"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 20V4M3.5 7.5 7 4l3.5 3.5M17 4v16M13.5 16.5 17 20l3.5-3.5"/></svg></button>
+</nav>
 
 <aside class="card" id="card" aria-label="Video">
   <div class="tools" id="tools">
@@ -302,14 +340,16 @@ renderer.outputEncoding = THREE.sRGBEncoding;
 sceneEl.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
-const orbit = { az: 0, pol: 0.74, base: 13, zoom: 1, azTarget: 0 };
+// az, pol and zoom ease towards their targets; sway is the auto-rotate swing added to az
+const orbit = { az: 0, pol: 0.74, base: 13, zoom: 1, azTarget: 0, polTarget: 0.74, zoomTarget: 1, sway: 0 };
 
 scene.add(new THREE.HemisphereLight(0xf4f1e6, 0x2a3530, 0.42));
 const key = new THREE.DirectionalLight(0xfff4e0, 0.8);
 key.position.set(-5, 11, 6);
 key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048);
-Object.assign(key.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7, near: 1, far: 30 });
+// wide enough for the things on the table around the board too
+Object.assign(key.shadow.camera, { left: -11.5, right: 11.5, top: 11.5, bottom: -11.5, near: 1, far: 34 });
 key.shadow.bias = -0.0005;
 key.shadow.radius = 3;
 scene.add(key);
@@ -439,8 +479,261 @@ function setTable(key){
   } else renderer.setClearColor(0x000000, 0);
   // the phone's browser bar matches the room
   themeMeta.content = t.room || themeMeta.dataset.plain;
+  props.visible = table.visible;
   placeCamera();
   dirty = true;
+}
+
+/* things lying on the table, laid out afresh on every visit: each player has a scoresheet that
+   fills in with the game's moves, a pen and a cup of coffee by their right hand, a chess clock
+   stands at one side of the board, and a few odds and ends are scattered around. The models are
+   from Poly Haven (CC0), packed into static/props.glb by tools/make_props.py; the clock and the
+   scoresheets are drawn here. White sits at +z, Black at -z, one unit is a square. */
+const props = new THREE.Group(); scene.add(props);
+const TABLE_Y = -0.425, PROP_SCALE = 16;  // the props are in metres, like the pieces
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = list => list[Math.floor(Math.random() * list.length)];
+const placed = [];  // footprints: {x, z, r}
+function fits(x, z, r){
+  if (Math.abs(x) < 4.9 + r * 0.7 && Math.abs(z) < 4.9 + r * 0.7) return false;  // clear of the board
+  return placed.every(p => Math.hypot(p.x - x, p.z - z) > p.r + r + 0.15);
+}
+function putDown(obj, x, z, rot, r, y = 0){
+  obj.position.set(x, TABLE_Y + y, z); obj.rotation.y = rot;
+  obj.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+  props.add(obj);
+  if (r) placed.push({ x, z, r });
+  return obj;
+}
+/* turn a point given for White's side round to Black's, or not */
+const side = (c, x, z) => c === 'w' ? [x, z] : [-x, -z];
+
+/* scoresheets: a printed form with the moves of the game being shown written in by hand */
+const SHEET_W = 2.4, SHEET_H = 3.4, SHEET_ROWS = 25;
+const sheets = [];
+const sheetInfo = { round: 1 + Math.floor(Math.random() * 9), board: 1 + Math.floor(Math.random() * 40), ink: pick(['#1f3c88', '#1b2a4a', '#2a2a2e']) };
+function drawSheet(g, w, h, rows, firstRow){
+  g.fillStyle = '#f7f4ec'; g.fillRect(0, 0, w, h);
+  const print = '#30465c', grid = '#b8c4cf', hand = `500 ${w * 0.05}px Caveat, "Segoe Print", cursive`;
+  g.fillStyle = print; g.textBaseline = 'middle'; g.textAlign = 'center';
+  g.font = `600 ${w * 0.042}px "Instrument Sans", system-ui, sans-serif`;
+  g.fillText('SCORESHEET', w / 2, h * 0.045);
+  g.font = `500 ${w * 0.026}px "Instrument Sans", system-ui, sans-serif`;
+  g.textAlign = 'left';
+  const m = w * 0.06, top = h * 0.13, bottom = h - m * 0.8, colW = (w - 2 * m) / 2, rowH = (bottom - top) / (SHEET_ROWS + 1);
+  const fieldY = h * 0.09;
+  for (const [label, x, x2, val] of [['Round', m, w * 0.36, sheetInfo.round], ['Board', w * 0.4, w * 0.66, sheetInfo.board], ['Date', w * 0.7, w - m, new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'numeric' })]]){
+    g.fillStyle = print; g.fillText(label, x, fieldY);
+    const lx = x + g.measureText(label).width + 6;
+    g.strokeStyle = grid; g.lineWidth = 1.5; g.beginPath(); g.moveTo(lx, fieldY + w * 0.018); g.lineTo(x2, fieldY + w * 0.018); g.stroke();
+    g.font = hand; g.fillStyle = sheetInfo.ink; g.fillText(String(val), lx + 6, fieldY - 2);
+    g.font = `500 ${w * 0.026}px "Instrument Sans", system-ui, sans-serif`;
+  }
+  for (let c = 0; c < 2; c++){
+    const x0 = m + c * colW, numW = colW * 0.18, mvW = (colW - numW) / 2;
+    g.fillStyle = print; g.textAlign = 'center';
+    g.fillText('White', x0 + numW + mvW / 2, top + rowH / 2); g.fillText('Black', x0 + numW + mvW * 1.5, top + rowH / 2);
+    g.strokeStyle = grid; g.lineWidth = 1.2;
+    g.strokeRect(x0, top, colW, bottom - top);
+    g.beginPath();
+    for (let r = 1; r <= SHEET_ROWS; r++){ g.moveTo(x0, top + r * rowH); g.lineTo(x0 + colW, top + r * rowH); }
+    g.moveTo(x0 + numW, top); g.lineTo(x0 + numW, bottom); g.moveTo(x0 + numW + mvW, top); g.lineTo(x0 + numW + mvW, bottom);
+    g.stroke();
+    for (let r = 0; r < SHEET_ROWS; r++){
+      const n = firstRow + c * SHEET_ROWS + r, y = top + (r + 1.5) * rowH, row = rows[n - rows.first];
+      g.font = `500 ${w * 0.026}px "Instrument Sans", system-ui, sans-serif`; g.fillStyle = print;
+      g.fillText(String(n), x0 + numW / 2, y);
+      if (!row) continue;
+      g.font = hand; g.fillStyle = sheetInfo.ink;
+      if (row.w) g.fillText(row.w, x0 + numW + mvW / 2, y - 1);
+      if (row.b) g.fillText(row.b, x0 + numW + mvW * 1.5, y - 1);
+    }
+  }
+}
+let sheetKey = null;
+/* moves: [{n, w, b}] numbered from the game's first move */
+function writeSheets(rows){
+  const key = JSON.stringify(rows);
+  if (key === sheetKey) return;
+  sheetKey = key;
+  rows.first = rows.length ? rows[0].n : 1;
+  const last = rows.length ? rows[rows.length - 1].n : 1;
+  // a full sheet goes under a fresh one
+  const firstRow = 1 + Math.floor((last - 1) / (2 * SHEET_ROWS)) * 2 * SHEET_ROWS;
+  for (const s of sheets){
+    drawSheet(s.image.getContext('2d'), s.image.width, s.image.height, rows, firstRow);
+    s.needsUpdate = true;
+  }
+  dirty = true;
+}
+function makeSheet(){
+  const tex = canvasTex(1024, () => {});
+  tex.image.width = 724; tex.image.height = 1024;
+  sheets.push(tex);
+  const paper = new THREE.MeshStandardMaterial({ color: 0xf2efe6, roughness: 0.9 });
+  const sheet = new THREE.Mesh(new THREE.BoxGeometry(SHEET_W, 0.02, SHEET_H),
+    [paper, paper, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.88 }), paper, paper, paper]);
+  sheet.position.y = 0.01;
+  const g = new THREE.Group(); g.add(sheet);
+  return g;
+}
+
+/* a digital chess clock: a wedge with the two times on its sloping face and a rocker on top,
+   down on the side of whoever just moved. The times run down for the side to move while the
+   video plays. */
+const CONTROLS = [[180, 2], [300, 0], [300, 3], [600, 0], [600, 5], [900, 10]];
+const clock = { mesh: null, tex: null, rockers: [], time: { w: 0, b: 0 }, inc: 0, lastT: null, shown: '', leftColour: 'w', side: 1 };
+{
+  const [base, inc] = pick(CONTROLS);
+  clock.inc = inc;
+  // a game already under way
+  clock.time.w = Math.round(base * rand(0.35, 0.95)); clock.time.b = Math.round(base * rand(0.35, 0.95));
+}
+const clockFmt = s => { s = Math.max(0, Math.ceil(s)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+function drawClock(){
+  if (!clock.tex) return;
+  const left = clock.leftColour, right = left === 'w' ? 'b' : 'w';
+  const txt = clockFmt(clock.time[left]) + '|' + clockFmt(clock.time[right]);
+  if (txt === clock.shown) return;
+  clock.shown = txt;
+  const c = clock.tex.image, g = c.getContext('2d'), w = c.width, h = c.height;
+  g.fillStyle = '#121416'; g.fillRect(0, 0, w, h);
+  const pad = h * 0.14;
+  g.fillStyle = '#9fae95'; g.fillRect(pad, pad, w - 2 * pad, h - 2 * pad);
+  g.fillStyle = 'rgba(0,0,0,0.06)'; g.fillRect(pad, h - pad - h * 0.12, w - 2 * pad, h * 0.12);
+  g.fillStyle = '#1d241b'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = `600 ${h * 0.42}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
+  const [a, b] = txt.split('|');
+  g.fillText(a, w * 0.27, h * 0.53); g.fillText(b, w * 0.73, h * 0.53);
+  g.fillRect(w / 2 - 1.5, pad + h * 0.12, 3, h - 2 * pad - h * 0.24);
+  // the dot by the side to move
+  const turn = (S.fen || START_FEN).split(' ')[1];
+  g.beginPath(); g.arc(turn === left ? w * 0.09 : w * 0.91, h * 0.3, h * 0.04, 0, Math.PI * 2); g.fill();
+  clock.tex.needsUpdate = true;
+  dirty = true;
+}
+function makeClock(){
+  const L = 3.0, D = 1.45, HB = 0.9, HF = 0.3, TOP = 0.5 * D;  // length, depth, back and front heights
+  const shape = new THREE.Shape([[0, 0], [D, 0], [D, HB], [D - TOP, HB], [0, HF]].map(([u, v]) => V2(u, v)));
+  const body = new THREE.ExtrudeGeometry(shape, { depth: L, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.04, bevelSegments: 2, curveSegments: 1 });
+  body.translate(0, 0, -L / 2);
+  body.rotateY(Math.PI / 2);  // its length now runs along x, and its depth along -z
+  body.computeVertexNormals();
+  const dark = pick([0x1b1d20, 0x24262a, 0x3a2418]);
+  const plastic = new THREE.MeshStandardMaterial({ color: new THREE.Color(dark).convertSRGBToLinear(), roughness: 0.45, metalness: 0.05 });
+  const g = new THREE.Group();
+  const m = new THREE.Mesh(body, plastic); m.position.y = 0.04; g.add(m);
+  // after rotateY(π/2), u (depth) runs along -z: the front (u = 0) is at z = 0 and the back at z = -D
+  clock.tex = canvasTex(512, () => {}); clock.tex.image.width = 512; clock.tex.image.height = 160;
+  const fx = D - TOP, slope = Math.hypot(fx, HB - HF), tilt = Math.atan2(HB - HF, fx);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(L * 0.86, slope * 0.78), new THREE.MeshStandardMaterial({ map: clock.tex, roughness: 0.3, metalness: 0 }));
+  // the face's middle, a hair out from the sloping surface
+  face.position.set(0, 0.04 + (HF + HB) / 2 + 0.045 * Math.cos(tilt), -fx / 2 + 0.045 * Math.sin(tilt));
+  face.rotation.x = -(Math.PI / 2 - tilt);
+  g.add(face);
+  for (const s of [-1, 1]){
+    const rocker = new THREE.Mesh(new THREE.BoxGeometry(L * 0.36, 0.1, TOP * 0.62), plastic);
+    rocker.position.set(s * L * 0.22, 0.04 + HB + 0.05, -(D - TOP / 2));
+    rocker.userData.s = s;
+    g.add(rocker); clock.rockers.push(rocker);
+  }
+  // shift so the group's origin is the middle of its footprint; the face looks towards +z
+  for (const o of g.children) o.position.z += D / 2;
+  return g;
+}
+/* the rocker on the side that just moved is down */
+function setRockers(){
+  const turn = (S.fen || START_FEN).split(' ')[1];
+  for (const r of clock.rockers){
+    const colour = r.userData.s < 0 ? clock.leftColour : clock.leftColour === 'w' ? 'b' : 'w';
+    const down = colour !== turn;
+    r.position.y = 0.04 + 0.9 + (down ? 0.0 : 0.09);
+    r.rotation.z = (down ? 0 : 0.09) * -r.userData.s;
+  }
+}
+
+function layOutTable(models){
+  props.clear(); placed.length = 0; sheets.length = 0; clock.rockers.length = 0; sheetKey = null;
+  const get = name => { const o = models.getObjectByName(name); return o ? o.clone() : null; };
+  const footprint = obj => { const b = new THREE.Box3().setFromObject(obj), s = b.getSize(new THREE.Vector3()); return Math.hypot(s.x, s.z) / 2; };
+  const scaled = name => { const o = get(name); if (o) o.scale.setScalar(PROP_SCALE); return o; };
+  // the clock, at one side of the board, its face turned outwards and a little towards White,
+  // and along from the scoresheet on that side
+  clock.side = Math.random() < 0.6 ? -1 : 1;  // more often on the a-file side, which is the emptier side on wide screens
+  const ck = makeClock();
+  const yaw = rand(0.25, 0.55);
+  putDown(ck, clock.side * rand(6.4, 6.9), -clock.side * rand(0.5, 1.1), clock.side < 0 ? yaw - Math.PI / 2 : Math.PI / 2 - yaw, 1.8);
+  // which colour's button is on the clock's left (its local -x)
+  ck.updateMatrixWorld(true);
+  const lp = new THREE.Vector3(-1, 0, 0).applyMatrix4(ck.matrixWorld);
+  clock.leftColour = lp.z > ck.position.z ? 'w' : 'b';
+  clock.shown = ''; drawClock(); setRockers();
+  // each player's things, by their right hand (White's right is +x)
+  for (const c of ['w', 'b']){
+    const turn = c === 'w' ? 0 : Math.PI;
+    const sheet = makeSheet();
+    const [sx, sz] = side(c, rand(6.1, 6.6), rand(3.6, 4.2));
+    putDown(sheet, sx, sz, turn + rand(-0.25, 0.1), 2.0);
+    const penName = pick(['pen_blue', 'pen_blue', 'pen_fancy', 'pen_red', 'pencil']);
+    const pen = scaled(penName);
+    if (pen){
+      const a = turn + rand(-1.1, -0.5);
+      const [ox, oz] = side(c, rand(-0.3, 0.5), rand(-0.6, 0.6));
+      putDown(pen, sx + ox, sz + oz, a, 0, 0.02);
+    }
+    const [kx, kz] = side(c, rand(8.3, 9.2), rand(4.6, 6.4));
+    const saucer = scaled('saucer'), cup = scaled('cup');
+    if (saucer && cup){
+      const g = new THREE.Group();
+      g.add(saucer); cup.position.y = 0.006 * PROP_SCALE; g.add(cup);
+      // coffee, glossy and dark, a little below the rim
+      const coffee = new THREE.Mesh(new THREE.CircleGeometry(0.0435 * PROP_SCALE, 40),
+        new THREE.MeshStandardMaterial({ color: new THREE.Color(pick([0x2b170c, 0x3a2112, 0x6b4428])).convertSRGBToLinear(), roughness: 0.12 }));
+      // the cup's bowl is off its middle, which counts the handle
+      cup.rotation.y = rand(-0.6, 0.6);
+      coffee.rotation.x = -Math.PI / 2;
+      coffee.position.set(0, (0.006 + 0.05) * PROP_SCALE, 0.013 * PROP_SCALE).applyAxisAngle(new THREE.Vector3(0, 1, 0), cup.rotation.y);
+      g.add(coffee);
+      putDown(g, kx, kz, turn + rand(-0.4, 0.4) + Math.PI / 2, 1.3);
+    }
+  }
+  // odds and ends, a few of these each time; tall ones (far) stay well away from the board
+  const EXTRAS = [
+    { name: 'plant', far: true, scale: 0.75 }, { name: 'teapot', far: true, scale: 0.7 }, { name: 'spectacles' }, { name: 'wrist_watch' },
+    { name: 'pocket_watch' }, { name: 'croissant', on: 'plate', scale: 0.85 }, { name: 'apple' }, { name: 'magnifier', scale: 0.8 },
+    { name: 'pencil_cup' }, { name: 'eraser' }, { name: 'pencil_used' },
+  ];
+  const chosen = EXTRAS.sort(() => Math.random() - 0.5).slice(0, 4 + Math.floor(Math.random() * 3));
+  // every other one goes to the left of the board as White sees it (the top left of a wide screen),
+  // the rest to the mirror of that, by White's right hand
+  chosen.forEach((ex, i) => {
+    let obj = scaled(ex.name);
+    if (!obj) return;
+    if (ex.on){
+      const under = scaled(ex.on);
+      if (under){ const g = new THREE.Group(); g.add(under); obj.position.y = 0.015 * PROP_SCALE; obj.rotation.y = rand(0, Math.PI * 2); g.add(obj); obj = g; }
+    }
+    if (ex.scale) obj.scale.multiplyScalar(ex.scale);
+    const r = footprint(obj) * 0.9;
+    for (let tries = 0; tries < 80; tries++){
+      let x = rand(5.2, 10.6), z = rand(-6.4, 3.2);
+      if (tries > 40 && Math.random() < 0.5){ x = rand(-5.5, 5.5); z = -rand(5.6, 8.4); }  // or, if crowded, beyond an end
+      if (i % 2) [x, z] = [-x, -z];
+      x = -x;  // so even ones start on the a-file side
+      if (ex.far && (Math.hypot(x, z) < 8 || z > -1)) continue;  // and away from White's side, where the camera usually is
+      if (Math.hypot(x, z) > 11.2 || !fits(x, z, r)) continue;
+      putDown(obj, x, z, rand(0, Math.PI * 2), r);
+      break;
+    }
+  });
+  dirty = true;
+}
+/* loaded after the pieces, which matter more */
+function loadProps(){
+  new THREE.GLTFLoader().load('props.glb', gltf => {
+    layOutTable(gltf.scene);
+    updateSheets();
+  }, undefined, err => console.warn('props.glb', err));
 }
 
 /* last-move squares: a bright yellow wash with a solid rim, so the rim still shows around a piece's base;
@@ -628,7 +921,8 @@ if (THREE.GLTFLoader) new THREE.GLTFLoader().load('pieces.glb', gltf => {
   paintPieces(pieceColours.w, pieceColours.b, pieceWood.value);
   for (const g of view.meshes) if (g) fillPiece(g, g.userData.ch);
   dirty = true;
-}, undefined, err => console.warn('pieces.glb', err));
+  loadProps();
+}, undefined, err => { console.warn('pieces.glb', err); loadProps(); });
 function fillPiece(g, ch){
   const color = ch === ch.toUpperCase() ? 'w' : 'b', knight = ch.toLowerCase() === 'n';
   g.clear();
@@ -719,10 +1013,10 @@ function runTweens(now){
 
 /* camera orbit */
 function placeCamera(){
-  const sp = Math.sin(orbit.pol);
+  const sp = Math.sin(orbit.pol), az = orbit.az + orbit.sway;
   const d = orbit.base * orbit.zoom;
-  camera.position.set(d * sp * Math.sin(orbit.az), d * Math.cos(orbit.pol), d * sp * Math.cos(orbit.az));
-  camera.lookAt(0, -0.35, 0.45 * Math.cos(orbit.az));
+  camera.position.set(d * sp * Math.sin(az), d * Math.cos(orbit.pol), d * sp * Math.cos(az));
+  camera.lookAt(0, -0.35, 0.45 * Math.cos(az));
   // fog starts past the board, so only the table fades
   scene.fog.near = table.visible ? d + 5 : 1e4;
   scene.fog.far = table.visible ? d + 42 : 1e4;
@@ -734,13 +1028,54 @@ cv.addEventListener('pointermove', e => {
   if (!drag) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY };
   orbit.az -= dx * 0.008; orbit.azTarget = orbit.az;
-  orbit.pol = Math.min(1.32, Math.max(0.12, orbit.pol - dy * 0.006));
+  orbit.pol = orbit.polTarget = Math.min(1.32, Math.max(0.12, orbit.pol - dy * 0.006));
+  if (dx || dy) showView(null);
   dirty = true;
 });
 cv.addEventListener('pointerup', () => { drag = null; });
-cv.addEventListener('wheel', e => { e.preventDefault(); orbit.zoom = Math.min(1.7, Math.max(0.55, orbit.zoom * (1 + Math.sign(e.deltaY) * 0.08))); dirty = true; }, { passive: false });
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  orbit.zoom = orbit.zoomTarget = Math.min(1.7, Math.max(0.55, orbit.zoomTarget * (1 + Math.sign(e.deltaY) * 0.08)));
+  showView(null); dirty = true;
+}, { passive: false });
 function turnTo(az){ orbit.azTarget = az; if (reduceMotion) orbit.az = az; dirty = true; }
-$('#flipBtn').onclick = () => turnTo(orbit.az + Math.PI);
+$('#flipBtn').onclick = $('#camFlip').onclick = () => turnTo(orbit.azTarget + Math.PI);
+
+/* camera presets (the bar at the top right), seen from the side the camera is on now */
+const VIEWS = {
+  overview: { pol: 0.74, zoom: 1 },
+  top: { pol: 0.12, zoom: 0.98 },
+  player: { pol: 1.13, zoom: 0.74 },
+  side: { pol: 0.9, zoom: 0.92, side: true },  // from the side across from the clock, which stands beyond the board
+  table: { pol: 0.88, zoom: 1.7 },
+};
+function shortestTurn(want){ return orbit.azTarget + Math.atan2(Math.sin(want - orbit.azTarget), Math.cos(want - orbit.azTarget)); }
+function showView(name){
+  for (const b of document.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed', b.dataset.view === name ? 'true' : 'false');
+  const v = VIEWS[name];
+  if (!v) return;
+  // White's side (az 0) or Black's (az π): the nearer one, or the video's when side-on
+  const c = Math.cos(orbit.azTarget);
+  const home = Math.abs(c) > 0.3 ? (c > 0 ? 0 : Math.PI) : S.viewWb === false ? Math.PI : 0;
+  turnTo(shortestTurn(v.side ? -clock.side * Math.PI / 2 : home));
+  orbit.polTarget = v.pol; orbit.zoomTarget = v.zoom;
+  if (reduceMotion){ orbit.pol = v.pol; orbit.zoom = v.zoom; }
+  dirty = true;
+}
+for (const b of document.querySelectorAll('[data-view]')) b.onclick = () => showView(b.dataset.view);
+/* auto-rotate: swing slowly left and right around wherever the camera is pointed */
+const SWAY = { on: false, phase: 0, amp: 0.65, period: 44 };
+function setSway(on){
+  if (!on && SWAY.on){
+    // stop where it is
+    orbit.az += orbit.sway; orbit.azTarget += orbit.sway; orbit.sway = 0;
+  }
+  SWAY.on = on; SWAY.phase = 0;
+  $('#swayBtn').setAttribute('aria-pressed', on ? 'true' : 'false');
+  try { localStorage.setItem('shadowboard.sway', on ? '1' : '0'); } catch (e) {}
+  dirty = true;
+}
+$('#swayBtn').onclick = () => setSway(!SWAY.on);
 /* view the board from the same side as the video: White's side (az 0) or Black's (az π) */
 function faceSide(whiteBottom){
   const want = whiteBottom ? 0 : Math.PI;
@@ -780,9 +1115,20 @@ function resize3D(){
 }
 new ResizeObserver(resize3D).observe(sceneEl);
 let dirty = true;
+let lastFrame = 0;
 function loop(now){
   let moving = false;
-  if (Math.abs(orbit.azTarget - orbit.az) > 0.001){ orbit.az += (orbit.azTarget - orbit.az) * 0.12; moving = true; }
+  const dt = Math.min(0.1, (now - (lastFrame || now)) / 1000); lastFrame = now;
+  // ease towards the targets at the same pace whatever the frame rate
+  const k = 1 - Math.exp(-7 * (dt || 1 / 60));
+  if (Math.abs(orbit.azTarget - orbit.az) > 0.001){ orbit.az += (orbit.azTarget - orbit.az) * k; moving = true; }
+  if (Math.abs(orbit.polTarget - orbit.pol) > 0.0005){ orbit.pol += (orbit.polTarget - orbit.pol) * k; moving = true; }
+  if (Math.abs(orbit.zoomTarget - orbit.zoom) > 0.0005){ orbit.zoom += (orbit.zoomTarget - orbit.zoom) * k; moving = true; }
+  if (SWAY.on){
+    SWAY.phase += dt * 2 * Math.PI / SWAY.period;
+    orbit.sway = SWAY.amp * Math.sin(SWAY.phase);
+    moving = true;
+  }
   if (tweens.length){ runTweens(now); moving = true; }
   if (moving || dirty){
     placeCamera();
@@ -864,6 +1210,7 @@ function resetAll(){
   video.pause(); video.removeAttribute('src'); video.load(); video.hidden = true;
   $('#progress').style.width = '0';
   sync3D(fenToBoard(START_FEN), false); highlight(null); drawMarks(null);
+  updateSheets(); setRockers(); drawClock();
   updateButtons();
 }
 function showEmpty(err){
@@ -1023,6 +1370,10 @@ setInterval(() => {
     S.fen = ev ? ev.fen : START_FEN;
     sync3D(fenToBoard(S.fen), step);
     highlight(ev);
+    // the clock: an increment for whoever just moved, and the rocker down on their side
+    if (step && ev && ev.san){ const moved = ev.fen.split(' ')[1] === 'w' ? 'b' : 'w'; clock.time[moved] += clock.inc; }
+    setRockers(); drawClock();
+    updateSheets();
     $('#lichessBtn').href = 'https://lichess.org/analysis/standard/' + S.fen.replace(/ /g, '_');
   }
   faceVideo();
@@ -1260,12 +1611,49 @@ cv.addEventListener('pointermove', e => {
     drag = null;
     const [a, b] = [...touches.values()];
     const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-    orbit.zoom = Math.min(1.7, Math.max(0.55, pinch0.z * pinch0.d / Math.max(d, 1)));
-    dirty = true;
+    orbit.zoom = orbit.zoomTarget = Math.min(1.7, Math.max(0.55, pinch0.z * pinch0.d / Math.max(d, 1)));
+    showView(null); dirty = true;
   }
 });
 const endTouch = e => { touches.delete(e.pointerId); if (touches.size < 2) pinch0 = null; };
 cv.addEventListener('pointerup', endTouch); cv.addEventListener('pointercancel', endTouch);
+
+/* the moves of the game on show, for the scoresheets: back to the last game start (or a position
+   the reader jumped to), with takebacks taken off. [{n, w, b}] */
+const START_PLACEMENT = START_FEN.split(' ')[0];
+function gameMoves(){
+  let line = [];
+  for (let i = 0; i <= S.idx && i < S.events.length; i++){
+    const e = S.events[i], place = e.fen.split(' ')[0];
+    if (e.san) line.push({ san: e.san, fen: e.fen });
+    else if (e.jump || place === START_PLACEMENT) line = [];
+    else while (line.length && line[line.length - 1].fen.split(' ')[0] !== place) line.pop();
+  }
+  const rows = [];
+  for (const { san, fen } of line){
+    const [, turn, , , , full] = fen.split(' ');
+    const n = turn === 'b' ? +full : +full - 1, white = turn === 'b';
+    let row = rows[rows.length - 1];
+    if (!row || row.n !== n || white || row.b){ row = { n }; rows.push(row); }
+    if (white) row.w = san; else { if (!row.w && rows.length === 1) row.w = '\u2026'; row.b = san; }
+  }
+  return rows;
+}
+function updateSheets(){ if (sheets.length) writeSheets(gameMoves()); }
+// the scoresheets are written by hand: redraw them once the handwriting font is in
+Promise.all(['500 40px Caveat', '600 30px "Instrument Sans"'].map(f => document.fonts.load(f))).then(() => { sheetKey = null; updateSheets(); }).catch(() => {});
+/* the clock runs for the side to move while the video plays */
+setInterval(() => {
+  if (!clock.tex) return;
+  const t = playerTime();
+  if (S.source && clock.lastT != null && t > clock.lastT && t - clock.lastT < 2){
+    const turn = S.fen.split(' ')[1];
+    clock.time[turn] = Math.max(0, clock.time[turn] - (t - clock.lastT));
+  }
+  clock.lastT = t;
+  drawClock();
+}, 250);
+try { if (localStorage.getItem('shadowboard.sway') === '1') setSway(true); } catch (e) {}
 
 sync3D(fenToBoard(START_FEN), false);
 resize3D();
