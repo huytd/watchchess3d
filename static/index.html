@@ -165,6 +165,7 @@ img,video,canvas{max-width:none}
     <button id="autoBtn">Find the board again automatically</button>
     <hr>
     <button id="flipBtn">Flip board</button>
+    <button id="marksBtn" aria-pressed="true">Show arrows from the video</button>
     <button id="copyBtn">Copy FEN</button>
     <a id="lichessBtn" target="_blank" rel="noopener" href="#">Analyze on Lichess</a>
   </div>
@@ -288,6 +289,65 @@ const hl = hlMats.map(mat => { const m = new THREE.Mesh(new THREE.PlaneGeometry(
 
 const sqPos = i => new THREE.Vector3((i % 8) - 3.5, 0, 3.5 - Math.floor(i / 8));
 const sqIndex = name => (+name[1] - 1) * 8 + FILES.indexOf(name[0]);
+
+/* arrows, circles and coloured squares the streamer draws; arrows arc over the pieces and
+   draw on top of everything, so a piece never hides one */
+const MARK_COLOURS = { green: 0x3fae49, red: 0xe0483e, blue: 0x3b82e0, orange: 0xf0a020 };
+const markMats = {};
+function markMat(colour, kind){
+  const k = colour + kind;
+  if (!markMats[k]) markMats[k] = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(MARK_COLOURS[colour] || MARK_COLOURS.orange).convertSRGBToLinear(),
+    transparent: true, opacity: kind === 'square' ? 0.5 : 0.9,
+    side: THREE.DoubleSide, depthWrite: false, depthTest: kind !== 'arrow',
+  });
+  return markMats[k];
+}
+function arrowGeometry(from, to){
+  const a = sqPos(sqIndex(from)), b = sqPos(sqIndex(to));
+  a.y = b.y = 0.04;
+  const top = a.clone().add(b).multiplyScalar(0.5);
+  top.y = 2 * Math.min(0.75, 0.15 + 0.07 * a.distanceTo(b));  // a quadratic curve peaks at half its control point
+  const curve = new THREE.QuadraticBezierCurve3(a, top, b);
+  const side = new THREE.Vector3(b.z - a.z, 0, a.x - b.x).normalize();
+  const W = 0.085, HEAD_W = 0.3, HEAD_L = 0.45, N = 48;  // half widths
+  const shaftEnd = 1 - HEAD_L / curve.getLength();
+  const pos = [], idx = [];
+  for (let i = 0; i <= N; i++){
+    const p = curve.getPointAt(shaftEnd * i / N);
+    pos.push(p.x + side.x * W, p.y, p.z + side.z * W, p.x - side.x * W, p.y, p.z - side.z * W);
+    if (i) idx.push(2 * i - 2, 2 * i - 1, 2 * i, 2 * i - 1, 2 * i + 1, 2 * i);
+  }
+  const h = curve.getPointAt(shaftEnd), k = pos.length / 3;
+  pos.push(h.x + side.x * HEAD_W, h.y, h.z + side.z * HEAD_W, h.x - side.x * HEAD_W, h.y, h.z - side.z * HEAD_W, b.x, b.y, b.z);
+  idx.push(k, k + 1, k + 2);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  return g;
+}
+const marksGroup = new THREE.Group(); scene.add(marksGroup);
+const ringGeo = new THREE.RingGeometry(0.38, 0.46, 48), squareGeo = new THREE.PlaneGeometry(1, 1);
+function flatMark(geo, mat, sq, y){
+  const m = new THREE.Mesh(geo, mat); m.rotation.x = -Math.PI / 2;
+  const p = sqPos(sqIndex(sq)); m.position.set(p.x, y, p.z);
+  marksGroup.add(m);
+}
+function drawMarks(m){
+  for (const o of marksGroup.children.slice()){
+    if (o.geometry !== ringGeo && o.geometry !== squareGeo) o.geometry.dispose();
+    marksGroup.remove(o);
+  }
+  if (m){
+    for (const q of m.squares || []) flatMark(squareGeo, markMat(q.color, 'square'), q.sq, 0.004);
+    for (const c of m.circles || []) flatMark(ringGeo, markMat(c.color, 'circle'), c.sq, 0.009);
+    for (const a of m.arrows || []){
+      const mesh = new THREE.Mesh(arrowGeometry(a.from, a.to), markMat(a.color, 'arrow'));
+      mesh.renderOrder = 10; marksGroup.add(mesh);
+    }
+  }
+  dirty = true;
+}
 
 /* piece geometry */
 const V2 = (r, y) => new THREE.Vector2(r, y);
@@ -486,7 +546,7 @@ function loop(now){
 /* ---------- app ---------- */
 const S = { job: null, gen: null, events: [], status: null, region: null, W: 0, H: 0, duration: 0, progress: 0,
   source: null, videoId: null, cropped: false, idx: -2, fen: START_FEN, pollTimer: null, fixing: false, whiteBottom: null,
-  player: null, playerReady: false };
+  player: null, playerReady: false, marks: [], markIdx: -2, showMarks: true };
 const stage = $('#stage'), card = $('#card'), video = $('#video'), still = $('#still');
 const overlay = $('#overlay'), octx = overlay.getContext('2d'), hintEl = $('#hint');
 function hint(m, warn){ hintEl.textContent = m; hintEl.title = m; hintEl.classList.toggle('warn', !!warn); }
@@ -526,14 +586,14 @@ async function showYouTube(id){
 function resetAll(){
   clearTimeout(S.pollTimer);
   Object.assign(S, { job: null, gen: null, events: [], status: null, region: null, W: 0, H: 0, duration: 0,
-    progress: 0, source: null, videoId: null, idx: -2, fen: START_FEN, whiteBottom: null });
+    progress: 0, source: null, videoId: null, idx: -2, fen: START_FEN, whiteBottom: null, marks: [], markIdx: -2 });
   endFix(true);
   setCrop(false);
   try { if (S.player && S.playerReady) S.player.stopVideo(); } catch (e) {}
   const yt = $('#yt'); if (yt) yt.style.display = 'none';
   video.pause(); video.removeAttribute('src'); video.load(); video.hidden = true;
   $('#progress').style.width = '0';
-  sync3D(fenToBoard(START_FEN), false); highlight(null);
+  sync3D(fenToBoard(START_FEN), false); highlight(null); drawMarks(null);
   updateButtons();
 }
 function showEmpty(err){
@@ -602,16 +662,18 @@ async function poll(){
   const jid = S.job;
   let j;
   try {
-    const r = await fetch(`/api/jobs/${jid}?since=${S.events.length}`);
+    const r = await fetch(`/api/jobs/${jid}?since=${S.events.length}&msince=${S.marks.length}`);
     if (r.status === 404) return showEmpty('The server restarted and forgot this video. Load it again.');
     j = await r.json();
   } catch (e) { S.pollTimer = setTimeout(poll, 3000); return; }
   if (jid !== S.job) return;
-  if (S.gen !== null && j.gen !== S.gen){ S.gen = j.gen; S.events = []; S.idx = -2; return poll(); }
+  if (S.gen !== null && j.gen !== S.gen){ S.gen = j.gen; S.events = []; S.idx = -2; S.marks = []; S.markIdx = -2; return poll(); }
   S.gen = j.gen;
-  for (const e of j.events){
-    const prevT = S.events.length ? S.events[S.events.length - 1].t : 0;
-    S.events.push({ ...e, t: Math.max(e.t, prevT) });
+  for (const [list, add] of [[S.events, j.events], [S.marks, j.marks || []]]){
+    for (const e of add){
+      const prevT = list.length ? list[list.length - 1].t : 0;
+      list.push({ ...e, t: Math.max(e.t, prevT) });
+    }
   }
   const hadRegion = !!S.region;
   S.region = j.region; S.W = j.width || S.W; S.H = j.height || S.H; S.duration = j.duration || S.duration;
@@ -643,9 +705,9 @@ function statusHint(){
 }
 
 /* keep the 3D board in step with the video */
-function eventAt(t){
-  let lo = 0, hi = S.events.length - 1, ans = -1;
-  while (lo <= hi){ const mid = (lo + hi) >> 1; if (S.events[mid].t <= t){ ans = mid; lo = mid + 1; } else hi = mid - 1; }
+function indexAt(list, t){
+  let lo = 0, hi = list.length - 1, ans = -1;
+  while (lo <= hi){ const mid = (lo + hi) >> 1; if (list[mid].t <= t){ ans = mid; lo = mid + 1; } else hi = mid - 1; }
   return ans;
 }
 function highlight(ev){
@@ -659,7 +721,7 @@ function highlight(ev){
 setInterval(() => {
   if (!S.job) return;
   const t = playerTime() + 0.1;
-  const i = eventAt(t);
+  const i = indexAt(S.events, t);
   if (i !== S.idx){
     const step = i === S.idx + 1;
     S.idx = i;
@@ -669,6 +731,8 @@ setInterval(() => {
     highlight(ev);
     $('#lichessBtn').href = 'https://lichess.org/analysis/standard/' + S.fen.replace(/ /g, '_');
   }
+  const mi = indexAt(S.marks, t);
+  if (mi !== S.markIdx){ S.markIdx = mi; drawMarks(mi >= 0 ? S.marks[mi] : null); }
   if (S.status === 'processing' && !S.fixing){
     const done = S.progress * S.duration;
     if (t > done + 2) hint(`Still reading this part of the video (analyzed up to ${mmss(done)}).`);
@@ -780,13 +844,13 @@ overlay.addEventListener('pointerup', async () => {
 async function restartWith(body){
   if (!S.job) return;
   clearTimeout(S.pollTimer);
-  S.events = []; S.idx = -2; S.whiteBottom = null;
+  S.events = []; S.idx = -2; S.whiteBottom = null; S.marks = []; S.markIdx = -2;
   hint('Reading the video again with the new settings\u2026');
   const r = await fetch(`/api/jobs/${S.job}/board`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
   const j = r && r.ok ? await r.json().catch(() => null) : null;
   // a poll that was already in flight may have added the old run's positions; drop them
   clearTimeout(S.pollTimer);
-  S.events = []; S.idx = -2; S.whiteBottom = null;
+  S.events = []; S.idx = -2; S.whiteBottom = null; S.marks = []; S.markIdx = -2;
   S.gen = j ? j.gen : null;
   poll();
 }
@@ -802,6 +866,13 @@ $('#fileInput').onchange = e => { const f = e.target.files && e.target.files[0];
 $('#newBtn').onclick = () => showEmpty();
 $('#orient').onchange = e => restartWith(S.region ? { x: S.region[0], y: S.region[1], w: S.region[2], h: S.region[3], orientation: e.target.value } : { auto: true, orientation: e.target.value });
 $('#autoBtn').onclick = () => { S.region = null; setCrop(false); restartWith({ auto: true, orientation: $('#orient').value }); };
+function setShowMarks(on){
+  S.showMarks = on; marksGroup.visible = on; dirty = true;
+  $('#marksBtn').setAttribute('aria-pressed', on ? 'true' : 'false');
+  try { localStorage.setItem('shadowboard.marks', on ? '1' : '0'); } catch (e) {}
+}
+$('#marksBtn').onclick = () => setShowMarks(!S.showMarks);
+try { if (localStorage.getItem('shadowboard.marks') === '0') setShowMarks(false); } catch (e) {}
 $('#copyBtn').onclick = async () => {
   try { await navigator.clipboard.writeText(S.fen); hint('FEN copied.'); } catch (e) { hint(S.fen); }
 };

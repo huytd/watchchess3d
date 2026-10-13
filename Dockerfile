@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -r
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py pipeline.py recognizer.py model.json ./
+COPY app.py pipeline.py recognizer.py marks.py model.json ./
 COPY static ./static
 ENV SHADOWBOARD_DATA=/data
 VOLUME /data

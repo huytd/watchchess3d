@@ -5,12 +5,14 @@
 2. read the board ~3 times a second with the CNN
 3. turn noisy per-frame readings into a clean sequence of positions, preferring
    legal moves (python-chess) so a shaky square can't derail the game
+4. alongside, pick out the arrows and circles streamers draw on the board (marks.py)
 """
 import json, math, subprocess
 import numpy as np
 import cv2
 import chess
 
+import marks
 from recognizer import Recognizer, board_tiles, CLASSES
 
 FPS = 3.0
@@ -347,6 +349,22 @@ def cells_to_squares(cells, white_bottom):
     return out
 
 
+def cell_name(rc, white_bottom):
+    """(row, col) in the board crop, top-left first -> square name."""
+    row, col = rc
+    return chess.square_name((7 - row) * 8 + col if white_bottom else row * 8 + (7 - col))
+
+
+def marks_to_squares(found, white_bottom):
+    out = []
+    for m in found:
+        if m[0] == 'arrow':
+            out.append(('arrow', cell_name(m[1], white_bottom), cell_name(m[2], white_bottom), m[3]))
+        else:
+            out.append((m[0], cell_name(m[1], white_bottom), m[2]))
+    return out
+
+
 def process(path, on_progress=None, region=None, orientation='auto', fps=FPS, batch=8):
     """Generator of events; also reports progress. Returns final info dict via on_progress."""
     W, H, duration = probe(path)
@@ -358,6 +376,7 @@ def process(path, on_progress=None, region=None, orientation='auto', fps=FPS, ba
         on_progress({'region': region, 'width': W, 'height': H, 'duration': duration, 'progress': 0})
     rec = recognizer()
     follower = Follower()
+    tracker = marks.MarkTracker(fps)
     votes = 0
     white_bottom = orientation != 'b'
     decided = orientation != 'auto'
@@ -365,15 +384,15 @@ def process(path, on_progress=None, region=None, orientation='auto', fps=FPS, ba
         found = detect_orientation(path, region, duration)
         if found is not None:
             white_bottom, decided = found, True
-    pending_t, pending_tiles = [], []
-    sent = 0
+    pending_t, pending_tiles, pending_imgs = [], [], []
+    sent = sent_marks = 0
 
     def flush():
-        nonlocal votes, white_bottom, decided, sent
+        nonlocal votes, white_bottom, decided, sent, sent_marks
         if not pending_tiles:
             return
         probs = rec.predict(np.concatenate(pending_tiles)).reshape(len(pending_tiles), 64, 13)
-        for t, cells in zip(pending_t, probs):
+        for t, cells, img in zip(pending_t, probs, pending_imgs):
             if not decided:
                 votes += orientation_vote(cells)
                 if abs(votes) >= 3:
@@ -381,15 +400,18 @@ def process(path, on_progress=None, region=None, orientation='auto', fps=FPS, ba
                 else:
                     continue  # wait until we know which way up the board is
             follower.feed(t, cells_to_squares(cells, white_bottom))
-        pending_t.clear(); pending_tiles.clear()
+            tracker.feed(t, marks_to_squares(marks.detect(img), white_bottom))
+        pending_t.clear(); pending_tiles.clear(); pending_imgs.clear()
         new = follower.events[sent:]
         sent = len(follower.events)
+        new_marks = tracker.events[sent_marks:]
+        sent_marks = len(tracker.events)
         if on_progress:
-            on_progress({'events': new, 'progress': min(1.0, (t + 1 / fps) / max(duration, 1e-6)),
-                         'white_bottom': white_bottom})
+            on_progress({'events': new, 'marks': new_marks, 'white_bottom': white_bottom,
+                         'progress': min(1.0, (t + 1 / fps) / max(duration, 1e-6))})
 
     for t, img in frames(path, fps, crop=region, size=(256, 256)):
-        pending_t.append(t); pending_tiles.append(board_tiles(img))
+        pending_t.append(t); pending_tiles.append(board_tiles(img)); pending_imgs.append(img)
         if len(pending_tiles) >= batch:
             flush()
     flush()

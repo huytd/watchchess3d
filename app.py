@@ -2,7 +2,7 @@
 
 POST /api/jobs            {"url": "<youtube link>"}      -> {"id": ...}
 POST /api/upload          multipart "file"               -> {"id": ...}
-GET  /api/jobs/{id}?since=N                              -> status, progress, board box, new events
+GET  /api/jobs/{id}?since=N&msince=M                     -> status, progress, board box, new events and marks
 POST /api/jobs/{id}/board {"x","y","w","h"} | {"auto": true}, optional "orientation": auto|w|b
 GET  /api/jobs/{id}/frame.jpg?t=SECONDS                  -> a still frame (for fixing the board box)
 GET  /api/jobs/{id}/video                                -> the uploaded file (uploads only)
@@ -33,7 +33,7 @@ YT_ID = re.compile(r'(?:v=|youtu\.be/|shorts/|embed/|live/)([A-Za-z0-9_-]{11})')
 
 def new_job(**kw):
     jid = uuid.uuid4().hex[:12]
-    jobs[jid] = dict(id=jid, status='queued', progress=0.0, events=[], region=None, width=None, height=None,
+    jobs[jid] = dict(id=jid, status='queued', progress=0.0, events=[], marks=[], region=None, width=None, height=None,
                      duration=None, error=None, path=None, gen=0, white_bottom=None, orientation='auto', **kw)
     return jobs[jid]
 
@@ -81,12 +81,12 @@ def run(job, gen):
             job['path'] = download(job)
         if gen != job['gen']:
             return
-        cache = os.path.join(DATA, 'results', job['cache_key'] + '.v2.json')  # v2: orientation voted over the whole video
+        cache = os.path.join(DATA, 'results', job['cache_key'] + '.v3.json')  # v3: arrows and circles too
         if job['region'] is None and job['orientation'] == 'auto' and os.path.exists(cache):
             res = json.load(open(cache))
             job.update(res, status='done', progress=1.0)
             return
-        job.update(status='finding_board', events=[], progress=0.0)
+        job.update(status='finding_board', events=[], marks=[], progress=0.0)
 
         def on_progress(p):
             if gen != job['gen']:
@@ -95,16 +95,17 @@ def run(job, gen):
             for k in ('region', 'width', 'height', 'duration', 'progress', 'white_bottom'):
                 if k in p:
                     job[k] = p[k]
-            if p.get('events'):
+            if p.get('events') or p.get('marks'):
                 with lock:
-                    job['events'].extend(p['events'])
+                    job['events'].extend(p.get('events') or [])
+                    job['marks'].extend(p.get('marks') or [])
 
         pipeline.process(job['path'], on_progress, region=job['region'], orientation=job['orientation'])
         if gen != job['gen']:
             return
         job.update(status='done', progress=1.0)
         if job['orientation'] == 'auto':
-            json.dump({k: job[k] for k in ('events', 'region', 'width', 'height', 'duration', 'white_bottom')},
+            json.dump({k: job[k] for k in ('events', 'marks', 'region', 'width', 'height', 'duration', 'white_bottom')},
                       open(cache, 'w'))
     except Cancelled:
         pass
@@ -178,14 +179,15 @@ def get(jid):
 
 
 @app.get('/api/jobs/{jid}')
-def status(jid: str, since: int = 0):
+def status(jid: str, since: int = 0, msince: int = 0):
     job = get(jid)
     with lock:
         ev = job['events'][since:]
         total = len(job['events'])
+        mk = job['marks'][msince:]
     out = {k: job[k] for k in ('id', 'status', 'progress', 'region', 'width', 'height', 'duration', 'error',
                                'source', 'video_id', 'white_bottom', 'orientation', 'gen')}
-    out.update(events=ev, total=total, download=job.get('download'))
+    out.update(events=ev, total=total, marks=mk, download=job.get('download'))
     return out
 
 
@@ -209,6 +211,7 @@ def set_board(jid: str, body: BoardIn):
         job['region'] = (body.x, body.y, body.w, body.h)
     with lock:
         job['events'] = []
+        job['marks'] = []
     job.update(status='queued', progress=0.0, error=None)
     start(job)
     return {'ok': True, 'gen': job['gen']}
