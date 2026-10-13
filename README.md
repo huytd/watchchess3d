@@ -56,8 +56,12 @@ you open never leave your device.
   colour on the top two rows and 16 of the other on the bottom two), and reads the board that way
   up until a game starts the other way round. Before the first game start (a video that joins a
   game in progress), it goes by the pawns, which can't pass each other on a file, and by where
-  the pieces stand. Every position records which way up it was read, and the 3D board turns to
-  match as playback reaches each game. Readings saved before this (no `version: 2`) are read again.
+  the pieces stand. The board can also be flipped at any point (one click on chess.com or Lichess,
+  sometimes animated in the video): when every piece moves at once and the screen shows one of the
+  last few positions turned round, for two readings in a row, the reader turns too, and drops
+  anything it took from the upside-down board. Every position records which way up it was read,
+  and the 3D board turns to match as playback reaches it. Readings saved before this (no
+  `version: 3`) are read again.
 - `static/cnn.js`: the square classifier (`static/model.json`), run with TensorFlow.js on the
   GPU (WebGL) or with WebAssembly, whichever is faster on the device.
 - `static/index.html`: the page (3D board + YouTube's embedded player).

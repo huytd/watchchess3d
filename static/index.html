@@ -1293,9 +1293,9 @@ async function startYouTube(url){
   // someone has read this video before: use their reading, no work to do
   if (j.results){
     const res = await fetch(`/api/videos/${j.video_id}/results`).then(x => x.ok ? x.json() : null).catch(() => null);
-    // readings saved before positions carried their orientation (version 2) may have a game
-    // the wrong way up: read those again
-    if (res && res.version >= 2 && S.videoId === j.video_id){
+    // readings saved before positions carried their orientation (version 2), or before a board
+    // flipped mid-video was noticed (version 3), may have a game the wrong way up: read those again
+    if (res && res.version >= 3 && S.videoId === j.video_id){
       S.saved = true;
       update({ status: 'done', region: res.region, width: res.width, height: res.height, duration: res.duration,
         progress: 1, events: res.events, marks: res.marks, whiteBottom: res.white_bottom });
@@ -1456,7 +1456,7 @@ function update(u){
 function saveReading(){
   if (S.saved || S.source !== 'youtube' || S.manual || $('#orient').value !== 'auto') return;
   S.saved = true;
-  const body = { version: 2, events: S.events, marks: S.marks, region: S.region, width: S.W, height: S.H, duration: S.duration, white_bottom: S.whiteBottom };
+  const body = { version: 3, events: S.events, marks: S.marks, region: S.region, width: S.W, height: S.H, duration: S.duration, white_bottom: S.whiteBottom };
   fetch(`/api/videos/${S.videoId}/results`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
 }
 

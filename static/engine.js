@@ -249,6 +249,17 @@ const cellSquare = (i, whiteBottom) => {
   const row = i >> 3, col = i & 7;
   return whiteBottom ? (7 - row) * 8 + col : row * 8 + (7 - col);
 };
+/* How many squares read (with some confidence) the same as board b, an array indexed by
+   square a1..h8, and how many don't, reading the cells the given way up. */
+function agreement(cells, whiteBottom, b){
+  let same = 0, differ = 0;
+  for (let i = 0; i < 64; i++){
+    const k = argmax(cells, i * 13, 13);
+    if (cells[i * 13 + k] <= 0.5) continue;
+    if (CLASSES[k] === b[cellSquare(i, whiteBottom)]) same++; else differ++;
+  }
+  return { same, differ };
+}
 export function cellsToSquares(cells, whiteBottom){
   const out = new Float32Array(64 * 13);
   for (let i = 0; i < 64; i++) out.set(cells.subarray(i * 13, i * 13 + 13), cellSquare(i, whiteBottom) * 13);
@@ -335,9 +346,7 @@ export class Follower {
     let histI = -1;
     for (let i = this.hist.length - 2; i >= 0; i--) if (this.hist[i].b.join('') === key){ histI = i; break; }
     if (histI >= 0 && (!best || best.v < llD)){
-      this.hist = this.hist.slice(0, histI + 1);
-      this.board = this.hist[histI].copy();
-      this.events.push({ t, fen: this.board.fen(), san: null, from: null, to: null });
+      this.back(t, histI);
       return;
     }
     if (best && best.v >= llD - 4){
@@ -361,6 +370,13 @@ export class Follower {
     this.board = nb;
     this.hist.push(nb.copy());
     this.events.push({ t, fen: nb.fen(), san: null, from: null, to: null, jump: true });
+  }
+
+  /* back to the position hist[i], forgetting the ones after it */
+  back(t, i){
+    this.hist = this.hist.slice(0, i + 1);
+    this.board = this.hist[i].copy();
+    this.events.push({ t, fen: this.board.fen(), san: null, from: null, to: null });
   }
 
   /* p: 64x13 probabilities indexed by square a1..h8 */
@@ -785,11 +801,15 @@ export class MarkTracker {
    it has been seen for two readings in a row, the board is read that way up until a game
    starts the other way round. Before the first one (a video that joins a game in progress),
    the guess from the whole video is used, and changed if the game being read keeps saying
-   otherwise. fixed: the viewer chose the orientation, so it never changes. Every position
+   otherwise. The board can also be flipped mid-video (chess.com and Lichess do it with one
+   click, and some videos animate it): every piece moves at once and the screen shows a position
+   just read, turned round. Seen for two readings in a row, that turns the board too, whatever
+   the position, and if the follower already took the upside-down board for a new position, it
+   goes back. fixed: the viewer chose the orientation, so it never changes. Every position
    comes with wb, which way up the board was when it was read. */
 export class Reader {
   constructor(predict, { whiteBottom = true, decided = false, fixed = false, fps = FPS } = {}){
-    Object.assign(this, { predict, whiteBottom, decided, fixed, votes: 0, anchored: fixed, startSeen: null, startRun: 0 });
+    Object.assign(this, { predict, whiteBottom, decided, fixed, votes: 0, anchored: fixed, startSeen: null, startRun: 0, startT: 0, flipRun: 0, flipT: 0 });
     this.follower = new Follower();
     this.tracker = new MarkTracker(fps);
     this.ref = this.probs = this.markRef = this.found = null;
@@ -814,7 +834,7 @@ export class Reader {
         todo.forEach((k, i) => this.probs.set(p.subarray(i * 13, i * 13 + 13), k * 13));
       }
     }
-    if (!this.fixed) this.orient();
+    if (!this.fixed) this.orient(t);
     if (this.decided){  // until then, wait to know which way up the board is
       this.follower.feed(t, cellsToSquares(this.probs, this.whiteBottom));
       if (!this.markRef || changedTiles(tiles, this.markRef).length){
@@ -829,14 +849,26 @@ export class Reader {
     return { events, marks, whiteBottom: this.whiteBottom, decided: this.decided };
   }
 
-  orient(){
+  orient(t){
     const start = startOrientation(this.probs);
     this.startRun = start !== null && start === this.startSeen ? this.startRun + 1 : 1;
+    if (this.startRun === 1) this.startT = t;
     this.startSeen = start;
+    const flip = this.flipped();
+    this.flipRun = flip >= 0 ? this.flipRun + 1 : 0;
+    if (this.flipRun === 1) this.flipT = t;
     if (start !== null && this.startRun >= 2){
       this.anchored = true;
       this.votes = 0;
-      this.turn(start);
+      this.turn(start, this.startT);
+      return;
+    }
+    if (this.flipRun >= 2){
+      // anything read off the upside-down board is wrong: back to the position it showed
+      const f = this.follower;
+      if (flip < f.hist.length - 1){ f.hist = f.hist.slice(0, flip + 1); f.board = f.hist[flip].copy(); }
+      this.votes = 0; this.flipRun = 0;
+      this.turn(!this.whiteBottom, this.flipT);
       return;
     }
     if (this.anchored) return;
@@ -844,14 +876,34 @@ export class Reader {
     // when this game keeps disagreeing with it
     this.votes += orientationVote(this.probs);
     const need = this.decided ? 8 : 3;
-    if (Math.abs(this.votes) >= need){ this.turn(this.votes > 0); this.votes = 0; }
+    if (Math.abs(this.votes) >= need){ this.turn(this.votes > 0, t); this.votes = 0; }
   }
 
-  turn(whiteBottom){
+  /* The board turned round: the screen shows one of the last few positions taken, upside down
+     (and not as it is: lots moved at once). Its index in the follower's history, or -1. */
+  flipped(){
+    const hist = this.follower.hist;
+    for (let i = hist.length - 1; i >= Math.max(0, hist.length - 6); i--){
+      const turned = agreement(this.probs, !this.whiteBottom, hist[i].b);
+      if (turned.same >= 48 && turned.differ <= 2 && agreement(this.probs, this.whiteBottom, hist[i].b).differ >= 6) return i;
+    }
+    return -1;
+  }
+
+  turn(whiteBottom, t){
     if (this.decided && whiteBottom === this.whiteBottom) return;
     // the squares now map the other way round: forget the smoothing over the old mapping
-    if (this.decided){ this.follower.sm = null; this.follower.pend.fill(null); }
+    const f = this.follower;
+    if (this.decided){ f.sm = null; f.pend.fill(null); }
     this.whiteBottom = whiteBottom; this.decided = true;
+    // the screen shows the position already taken, now the other way up: say it again, so the
+    // view turns with the video now, not at the next move
+    if (agreement(this.probs, whiteBottom, f.board.b).differ <= 2){
+      const last = f.events[f.events.length - 1], fen = f.board.fen();
+      // keeping the last move's squares lit if it is the position that move made
+      const lit = last && last.fen === fen ? { from: last.from, to: last.to } : { from: null, to: null };
+      f.events.push({ t: last ? Math.max(t, last.t) : t, fen, san: null, ...lit });
+    }
   }
 }
 
