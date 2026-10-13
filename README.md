@@ -6,6 +6,8 @@ the board, reads it about 3 times a second and builds a timeline of positions, a
 shows whichever position matches the current playback time, so pausing and seeking just work.
 Arrows and circles the streamer draws on the board show up on the 3D board too.
 
+<img width="1000" height="514" alt="image" src="https://github.com/user-attachments/assets/c7592d26-c61b-4a7f-a311-ae325a0e1928" />
+
 ## Run it
 
 With Docker:
