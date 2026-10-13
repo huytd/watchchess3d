@@ -54,7 +54,9 @@ you open never leave your device.
 - `static/index.html`: the page (3D board + YouTube's embedded player).
 - `static/pieces.glb`: the chess pieces, from Poly Haven's [Chess Set](https://polyhaven.com/a/chess_set)
   by Riley Queen (CC0), cut down to one mesh per piece type and 512px textures (690 KB) by
-  `tools/make_pieces.py`. Simple built-in pieces show until it has loaded.
+  `tools/make_pieces.py`. Simple built-in pieces show until it has loaded. Both sides share one
+  light colour map that the page tints, so the colours of the pieces and the board can be changed
+  under ⋯ › Board colours / Piece colours (presets or any colour; remembered in the browser).
 
 Speed depends on the device. Without a GPU (WebAssembly on 4 CPU cores) a 71-second test video
 took about 15 seconds, so roughly 2.5 minutes for 20 minutes of video; you can watch from the

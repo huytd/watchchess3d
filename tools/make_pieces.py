@@ -7,7 +7,9 @@ Download the glTF version (1k is plenty) and unzip it, then:
 
 The source has 32 pieces; the black ones are the white ones turned 180 degrees with the
 same UVs, and both colours share their normal and roughness maps, so this keeps one mesh per
-piece type, two materials and four textures (shrunk to 512px). Nodes are named by FEN letter
+piece type and three textures (shrunk to 512px). Both materials use the white pieces' colour
+map, the black one tinted to match the source's black pieces, so the page can tint either
+side any colour. Nodes are named by FEN letter
 (P N B R Q K for white, p n b r q k for black), every piece standing on y = 0 in metres and
 facing the way the source's white pieces do.
 """
@@ -67,13 +69,12 @@ def main(src, dst):
         return {'bufferView': add_view(buf.getvalue()), 'mimeType': 'image/jpeg'}
 
     tex = 'textures/chess_set_pieces_%s_1k.jpg'
-    images = [add_image(tex % 'white_diff'), add_image(tex % 'black_diff'),
-              add_image(tex % 'white_nor_gl'), add_image(tex % 'white_arm')]
+    images = [add_image(tex % 'white_diff'), add_image(tex % 'white_nor_gl'), add_image(tex % 'white_arm')]
 
-    def material(name, diffuse):
-        return {'name': name, 'normalTexture': {'index': 2}, 'occlusionTexture': {'index': 3},
-                'pbrMetallicRoughness': {'baseColorTexture': {'index': diffuse}, 'metallicFactor': 0,
-                                         'metallicRoughnessTexture': {'index': 3}}}
+    def material(name, tint):
+        return {'name': name, 'normalTexture': {'index': 1}, 'occlusionTexture': {'index': 2},
+                'pbrMetallicRoughness': {'baseColorTexture': {'index': 0}, 'baseColorFactor': tint,
+                                         'metallicFactor': 0, 'metallicRoughnessTexture': {'index': 2}}}
 
     meshes, nodes = [], []
     for colour, mat in (('w', 0), ('b', 1)):
@@ -86,7 +87,7 @@ def main(src, dst):
         'asset': {'version': '2.0', 'generator': 'tools/make_pieces.py',
                   'copyright': 'Chess Set by Riley Queen, Poly Haven (CC0)'},
         'scene': 0, 'scenes': [{'nodes': list(range(len(nodes)))}], 'nodes': nodes, 'meshes': meshes,
-        'materials': [material('white', 0), material('black', 1)],
+        'materials': [material('white', [1, 1, 1, 1]), material('black', [0.047, 0.042, 0.035, 1])],
         'textures': [{'sampler': 0, 'source': i} for i in range(len(images))],
         'samplers': [{'magFilter': 9729, 'minFilter': 9987}],
         'images': images, 'accessors': accessors, 'bufferViews': views,
