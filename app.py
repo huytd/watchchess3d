@@ -1,4 +1,4 @@
-"""Shadowboard server. It only fetches YouTube videos; reading the board happens in the
+"""Watch Chess in 3D server. It only fetches YouTube videos; reading the board happens in the
 browser (static/engine.js), so the server needs next to no CPU.
 
 POST /api/videos           {"url": "<youtube link>"}  -> {"video_id", status...}; starts the download
@@ -6,8 +6,12 @@ GET  /api/videos/{id}                                 -> status (downloading|rea
 GET  /api/videos/{id}/file                            -> the video (with range requests, so the browser can seek)
 GET  /api/videos/{id}/results                         -> a finished reading a browser saved earlier
 PUT  /api/videos/{id}/results                         -> save one, so the next viewer can skip the reading
+GET  /api/series                                      -> the series offered on the start card, with their episodes
+
+Run `python app.py series` to rewrite static/series.json, the copy of the series used until the
+server has fetched them itself.
 """
-import json, os, re, shutil, subprocess, threading
+import json, os, re, shutil, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -22,7 +26,7 @@ MAX_RESULTS_MB = 8
 os.makedirs(os.path.join(DATA, 'videos'), exist_ok=True)
 os.makedirs(os.path.join(DATA, 'results'), exist_ok=True)
 
-app = FastAPI(title='Shadowboard')
+app = FastAPI(title='Watch Chess in 3D')
 videos = {}  # video id -> {'status', 'download', 'error'}
 lock = threading.Lock()
 worker = ThreadPoolExecutor(max_workers=int(os.environ.get('SHADOWBOARD_WORKERS', 2)))
@@ -177,4 +181,81 @@ async def put_results(vid: str, request: Request):
     return {'ok': True}
 
 
+# The series on the start card, kept up to date from YouTube playlists. GothamChess has no playlist
+# of his own for the Slowrun, so this is the most complete one a viewer keeps (with the bonus episodes
+# and the Speedrun it turned into).
+SERIES = [
+    {'key': 'slowrun', 'title': 'Slowrun', 'channel': 'GothamChess', 'playlist': 'PLxH8DZpY_FC4vPjn-dz0-VmcZwmiuKWRa'},
+    {'key': 'slowkaru', 'title': 'Slowkaru', 'channel': 'Hikaru', 'playlist': 'PL4KCWZ5Ti2H4hFLv7HBwVzYflOrUZ3qum'},
+]
+SERIES_TTL = 12 * 3600
+SERIES_SNAPSHOT = os.path.join(os.path.dirname(__file__), 'static', 'series.json')
+SERIES_FILE = os.path.join(DATA, 'series.json')
+series_cache = {'data': None, 'at': 0.0, 'busy': False}
+
+
+def fetch_series():
+    import yt_dlp
+    opts = {'quiet': True, 'extract_flat': True, 'skip_download': True}
+    if os.environ.get('YTDLP_COOKIES'):
+        opts['cookiefile'] = os.environ['YTDLP_COOKIES']
+    out = []
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        for s in SERIES:
+            info = ydl.extract_info('https://www.youtube.com/playlist?list=' + s['playlist'], download=False)
+            episodes = [{'id': e['id'], 'title': e.get('title') or '', 'duration': e.get('duration')}
+                        for e in info.get('entries') or []
+                        if e and VID.match(e.get('id') or '') and e.get('duration')]  # private and deleted ones have none
+            if not episodes:
+                raise RuntimeError('empty playlist ' + s['playlist'])
+            out.append(dict(s, episodes=episodes))
+    return out
+
+
+def refresh_series():
+    try:
+        data = fetch_series()
+        tmp = SERIES_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(data, f)
+        os.replace(tmp, SERIES_FILE)
+        series_cache.update(data=data, at=time.time())
+    except Exception:  # YouTube refused: keep what we have, try again later
+        series_cache['at'] = time.time() - SERIES_TTL + 3600
+    finally:
+        series_cache['busy'] = False
+
+
+def load_series():
+    if series_cache['data'] is None:
+        for path in (SERIES_FILE, SERIES_SNAPSHOT):
+            try:
+                with open(path) as f:
+                    series_cache['data'] = json.load(f)
+                series_cache['at'] = os.path.getmtime(path) if path == SERIES_FILE else 0.0
+                break
+            except (OSError, ValueError):
+                pass
+    with lock:
+        stale = time.time() - series_cache['at'] > SERIES_TTL and not series_cache['busy']
+        if stale:
+            series_cache['busy'] = True
+    if stale:
+        threading.Thread(target=refresh_series, daemon=True).start()
+    return series_cache['data'] or []
+
+
+@app.get('/api/series')
+def series():
+    # ready: someone has read the episode already, so it opens with no wait
+    return [dict(s, episodes=[dict(e, ready=os.path.exists(results_path(e['id']))) for e in s['episodes']])
+            for s in load_series()]
+
+
 app.mount('/', StaticFiles(directory=os.path.join(os.path.dirname(__file__), 'static'), html=True), name='static')
+
+
+if __name__ == '__main__' and sys.argv[1:] == ['series']:
+    with open(SERIES_SNAPSHOT, 'w') as f:
+        json.dump(fetch_series(), f, indent=1)
+    print('wrote', SERIES_SNAPSHOT)
