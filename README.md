@@ -88,7 +88,7 @@ start while it works. The server itself stays under 100 MB of memory and uses al
 - **YouTube often blocks downloads from cloud servers** ("Sign in to confirm you're not a bot").
   It usually works from a home connection. On a VPS, export your browser's YouTube cookies to
   a cookies.txt and set `YTDLP_COOKIES`, and keep yt-dlp up to date.
-- If the board isn't found, or the wrong area is used, open Settings (the gear on the video) › **Draw the board area yourself**.
+- If the board isn't found, or the wrong area is used, open Settings (the gear above the video) › **Draw the board area yourself**.
 - Only flat 2D digital boards are recognized (Lichess/chess.com style), not filmed physical boards.
 - Arrows come in four colours (green, red, blue, orange). Faint ones (a pale arrow on a board of
   a similar colour, thin Lichess circles in a low-quality video) can be missed. Turn them off

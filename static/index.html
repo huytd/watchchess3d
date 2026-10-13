@@ -66,7 +66,7 @@ img,video,canvas{max-width:none}
 .stage canvas{position:absolute; inset:0; width:100%; height:100%; pointer-events:none}
 .stage.drawing canvas{pointer-events:auto; cursor:crosshair; touch-action:none}
 .empty{
-  position:absolute; inset:0; color:var(--stage-ink); padding:16px 18px; padding-right:56px;
+  position:absolute; inset:0; color:var(--stage-ink); padding:16px 18px;
   display:flex; flex-direction:column; justify-content:center; gap:10px; overflow:auto;
 }
 .empty .lead{margin:0; font-size:17px; font-weight:600}
@@ -90,28 +90,27 @@ img,video,canvas{max-width:none}
 #trackBtn.on{background:transparent; color:var(--ink); border-color:var(--accent)}
 #trackBtn.on::before{content:""; width:8px; height:8px; border-radius:50%; background:var(--accent)}
 
-/* controls floating over the video: crop (top left), status, settings (top right) */
+/* controls above the video, clear of YouTube's own: crop (top left), status, settings (top right) */
 .tools{
-  position:absolute; z-index:2; top:8px; left:8px; right:8px;
-  display:flex; align-items:flex-start; gap:8px; pointer-events:none;
+  position:absolute; z-index:2; left:0; right:0; bottom:calc(100% + 8px);
+  --tool:36px; display:grid; grid-template-columns:var(--tool) 1fr var(--tool); align-items:end; gap:8px; pointer-events:none;
 }
 .tools > .tool, .status button{pointer-events:auto}
 .tool{
-  flex:none; width:36px; height:36px; display:grid; place-items:center; padding:0; margin:0;
+  flex:none; width:var(--tool); height:var(--tool); display:grid; place-items:center; padding:0; margin:0;
   border:0; border-radius:50%; cursor:pointer; color:#fff;
   background:rgba(12,16,14,0.6); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
-  transition:background .15s ease, opacity .2s ease;
+  transition:background .15s ease;
 }
-/* with a mouse, the icons stay faint until the pointer is over the video */
-@media (hover:hover){
-  .card:not(:hover) .tool:not([aria-pressed="true"]):not([aria-expanded="true"]){opacity:.55}
-}
+
 .tool svg{width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round}
 .tool:hover{background:rgba(12,16,14,0.8)}
 .tool[aria-pressed="true"], .tool[aria-expanded="true"]{background:var(--accent); color:var(--accent-ink)}
-.tools .settings{margin-left:auto}
+.tools #cropBtn{grid-column:1}
+.tools .status{grid-column:2; justify-self:center}
+.tools .settings{grid-column:3}
 .status{
-  margin:0 auto; min-width:0; max-width:100%; padding:6px 12px; border-radius:14px;
+  margin:0; min-width:0; max-width:100%; padding:6px 12px; border-radius:14px;
   color:var(--stage-ink); font-size:12.5px; line-height:1.35; text-align:center;
   background:rgba(12,16,14,0.6); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
   display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
@@ -125,7 +124,7 @@ img,video,canvas{max-width:none}
 /* settings: a popover above the video card, a bottom sheet on phones */
 .menu-backdrop{display:none}
 .menu{
-  position:absolute; right:0; bottom:calc(100% + 8px); z-index:4;
+  position:absolute; right:0; bottom:calc(100% + 56px); z-index:4;
   width:270px; max-height:min(70vh, 560px); overflow:auto; overscroll-behavior:contain;
   background:var(--panel); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow);
   padding:6px; display:flex; flex-direction:column;
@@ -152,7 +151,7 @@ img,video,canvas{max-width:none}
     bottom:calc(8px + env(safe-area-inset-bottom,0px)); width:auto;
   }
   .card.cropped{width:min(72vw, 300px); right:auto}
-  .tool{width:40px; height:40px}
+  .tools{--tool:40px}
   /* 16px stops iOS zooming into a field when it gets focus */
   .empty input, .menu select{font-size:16px}
 }
@@ -181,7 +180,7 @@ img,video,canvas{max-width:none}
 .stage #yt, .stage iframe{position:absolute; inset:0; width:100%; height:100%; border:0}
 .card.cropped .stage #yt, .card.cropped .stage iframe, .card.cropped .stage video{inset:auto}
 .stage .still{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000}
-.progress{position:absolute; left:0; right:0; bottom:0; z-index:2; height:3px; pointer-events:none; transition:opacity .6s ease}
+.progress{position:absolute; left:0; right:0; top:0; z-index:2; height:3px; pointer-events:none; transition:opacity .6s ease}
 .progress.done{opacity:0}
 .progress span{display:block; height:100%; width:0; background:var(--accent); transition:width .4s ease}
 .empty form{display:flex; gap:8px; flex-wrap:wrap}
@@ -193,6 +192,11 @@ img,video,canvas{max-width:none}
 <div class="scene" id="scene" aria-label="3D chess board. Drag to rotate, pinch or scroll to zoom."></div>
 
 <aside class="card" id="card" aria-label="Video">
+  <div class="tools" id="tools">
+    <button class="tool" id="cropBtn" aria-pressed="false" hidden title="Show only the board" aria-label="Show only the board"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
+    <p class="status" id="hint" role="status" aria-live="polite"></p>
+    <button class="tool settings" id="moreBtn" aria-expanded="false" aria-controls="menu" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+  </div>
   <div class="stage" id="stage">
     <div id="yt"></div>
     <video id="video" playsinline controls hidden></video>
@@ -206,11 +210,6 @@ img,video,canvas{max-width:none}
       </form>
       <div class="or">or <button class="btn" id="fileBtn" type="button">upload a video file</button></div>
       <p class="err" id="emptyErr" hidden></p>
-    </div>
-    <div class="tools">
-      <button class="tool" id="cropBtn" aria-pressed="false" hidden title="Show only the board" aria-label="Show only the board"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
-      <p class="status" id="hint" role="status" aria-live="polite"></p>
-      <button class="tool settings" id="moreBtn" aria-expanded="false" aria-controls="menu" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
     </div>
     <div class="progress" aria-hidden="true"><span id="progress"></span></div>
   </div>
@@ -761,7 +760,7 @@ function resize3D(){
   // as big as fits there.
   if (wide) camera.setViewOffset(w, h, -Math.round(w * 0.085), 0, w, h);
   else if (aspect < 0.9){
-    const free = Math.max(h * 0.4, card.getBoundingClientRect().top);
+    const free = Math.max(h * 0.4, $('#tools').getBoundingClientRect().top);
     orbit.base = 14.2 * Math.max(1, 1.3 / aspect, 0.92 * h / free);
     camera.setViewOffset(w, h, 0, Math.round((h - free) / 2), w, h);
   }
@@ -791,7 +790,7 @@ const S = { source: null, videoId: null, src: null, events: [], status: null, er
 const stage = $('#stage'), card = $('#card'), video = $('#video'), still = $('#still');
 new ResizeObserver(resize3D).observe(card);
 const overlay = $('#overlay'), octx = overlay.getContext('2d'), hintEl = $('#hint');
-/* the status over the video; routine messages fade out once they stop changing */
+/* the status above the video; while nothing is in progress, routine messages fade after a while */
 let hintTimer = 0;
 function hint(m, warn){
   if (m === hintEl.dataset.msg && !!warn === hintEl.classList.contains('warn')) return;
@@ -799,7 +798,8 @@ function hint(m, warn){
   hintEl.classList.toggle('warn', !!warn);
   hintEl.classList.remove('quiet');
   clearTimeout(hintTimer);
-  if (!warn && !S.fixing) hintTimer = setTimeout(() => hintEl.classList.add('quiet'), 5000);
+  const busy = S.fixing || ['downloading', 'loading', 'finding_board', 'processing'].includes(S.status);
+  if (!warn && !busy) hintTimer = setTimeout(() => hintEl.classList.add('quiet'), 5000);
 }
 const mmss = t => { t = Math.max(0, Math.floor(t)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); };
 
@@ -1227,7 +1227,7 @@ const menu = $('#menu'), moreBtn = $('#moreBtn'), menuBackdrop = $('#menuBackdro
 function closeMenu(){ menu.hidden = menuBackdrop.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); }
 function openMenu(){
   // as a popover it opens upwards from the card, so it may only be as tall as the room above it
-  menu.style.maxHeight = matchMedia('(max-width:700px), (max-height:500px)').matches ? '' : Math.max(240, card.getBoundingClientRect().top - 16) + 'px';
+  menu.style.maxHeight = matchMedia('(max-width:700px), (max-height:500px)').matches ? '' : Math.max(240, $('#tools').getBoundingClientRect().top - 16) + 'px';
   menu.hidden = menuBackdrop.hidden = false; moreBtn.setAttribute('aria-expanded', 'true');
 }
 moreBtn.onclick = e => { e.stopPropagation(); menu.hidden ? openMenu() : closeMenu(); };
