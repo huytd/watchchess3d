@@ -27,7 +27,7 @@ home, put it behind HTTPS on a small VPS or a tunnel (Cloudflare Tunnel, Tailsca
 
 - `pipeline.py`: finds the board automatically by searching every size and position for
   the strongest 8x8 checkerboard pattern, then fine-tunes the edges. Reads each frame with
-  the CNN, smooths over time, and turns readings into positions, preferring legal moves
+  the CNN (only the squares that changed since they were last read), smooths over time, and turns readings into positions, preferring legal moves
   (python-chess) so one shaky square can't derail the game. Each position is timestamped
   to when it first appeared.
 - `marks.py`: finds the arrows, circles and red/blue squares streamers draw (Lichess and
@@ -35,15 +35,20 @@ home, put it behind HTTPS on a small VPS or a tunnel (Cloudflare Tunnel, Tailsca
   centres, so it tests every possible arrow (plus chess.com's L-shaped knight arrows)
   against a mask of strongly coloured pixels: the line must be covered, the strip beside it
   clear, and one end wider than the other (the head). A mark must hold for two readings to
-  show and be gone for two to disappear. About 10 ms per frame.
-- `recognizer.py`: the square classifier (same weights as the browser version), in numpy.
+  show and be gone for two to disappear. About 20 ms per frame, and skipped when nothing on
+  the board changed.
+- `recognizer.py`: the square classifier (same weights as the browser version), run with
+  OpenCV's dnn module.
 - `app.py`: FastAPI. Jobs run in the background; the page polls and can start playing
   while the rest of the video is still being read. Results are cached per video.
 - `static/index.html`: the page (3D board + YouTube's embedded player).
 
-Speed: about 80 ms per sampled frame on one CPU core, i.e. a 20-minute video takes roughly
-5 minutes on a single core and much less on a multi-core machine. You can watch from the start
-while it works.
+Speed: a 20-minute 480p video takes roughly 1 to 2 minutes on a single CPU core, about half of
+it spent by ffmpeg decoding the video. You can watch from the start while it works.
+
+Memory: the whole server, ffmpeg included, peaks around 190 MB while reading a 480p video
+(about 230 MB for 1080p uploads), so a 512 MB server is plenty with `SHADOWBOARD_WORKERS=1`.
+Each extra worker adds about 100 MB.
 
 ## Settings (environment variables)
 

@@ -7,7 +7,7 @@
    legal moves (python-chess) so a shaky square can't derail the game
 4. alongside, pick out the arrows and circles streamers draw on the board (marks.py)
 """
-import json, math, os, subprocess
+import json, math, os, subprocess, threading
 import numpy as np
 import cv2
 import chess
@@ -19,14 +19,14 @@ FPS = 3.0
 # ffmpeg starts a decoding thread, each with its own frames, per core it can see; in a
 # container that is often every core of the host, whatever the memory limit
 DECODE = ['-threads', str(min(4, len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else 4))]
-_rec = None
+_local = threading.local()
 
 
 def recognizer():
-    global _rec
-    if _rec is None:
-        _rec = Recognizer()
-    return _rec
+    # one per thread: an OpenCV network can't run two inputs at once (SHADOWBOARD_WORKERS > 1)
+    if not hasattr(_local, 'rec'):
+        _local.rec = Recognizer()
+    return _local.rec
 
 
 # ---------------------------------------------------------------- video helpers
