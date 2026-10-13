@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+python-multipart==0.0.20
+numpy==2.0.2
+opencv-python-headless==4.12.0.88
+chess==1.11.2
+# YouTube changes often; if downloads start failing, bump this to the latest release.
+yt-dlp==2026.8.19

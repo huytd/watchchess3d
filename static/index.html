@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#e2e5de">
+<title>Shadowboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+
+:root{
+  --bg:#e2e5de; --panel:#f3f4f0; --ink:#1b241f; --muted:#5b665e; --line:#c9cfc6;
+  --accent:#8a6a24; --accent-ink:#ffffff; --stage:#151b17; --stage-ink:#e3e9e1; --danger:#a33a2a;
+  --shadow:0 10px 30px rgba(20,28,24,0.18), 0 2px 6px rgba(20,28,24,0.12);
+  box-sizing:border-box;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#1e2722; --panel:#232d27; --ink:#e8e7dd; --muted:#9aa69c; --line:#38463e;
+    --accent:#cfa95f; --accent-ink:#1a221d; --stage:#0e1310; --danger:#e48a73;
+    --shadow:0 10px 30px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.3);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#1e2722; --panel:#232d27; --ink:#e8e7dd; --muted:#9aa69c; --line:#38463e;
+  --accent:#cfa95f; --accent-ink:#1a221d; --stage:#0e1310; --danger:#e48a73;
+  --shadow:0 10px 30px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.3);
+}
+*,*::before,*::after{box-sizing:inherit}
+[hidden]{display:none !important}
+html,body{height:100%; margin:0; overflow:hidden}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size:14px; line-height:1.4;
+}
+img,video,canvas{max-width:none}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+/* the board fills the page */
+.scene{position:fixed; inset:0; background:var(--bg)}
+.scene canvas{display:block; width:100%; height:100%; touch-action:none; cursor:grab}
+.scene canvas:active{cursor:grabbing}
+
+/* floating video card, bottom left */
+.card{
+  position:fixed; z-index:2;
+  left:calc(20px + env(safe-area-inset-left,0px)); bottom:calc(20px + env(safe-area-inset-bottom,0px));
+  width:clamp(300px, 30vw, 620px);
+  background:var(--panel); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow);
+  display:flex; flex-direction:column; transition:width .25s ease;
+}
+.card.expanded{width:min(62vw, 1100px)}
+.card.cropped{width:clamp(360px, 24vw, 460px)}
+.stage{
+  position:relative; aspect-ratio:16/9; background:var(--stage); overflow:hidden;
+  border-radius:15px 15px 0 0;
+}
+.card.cropped .stage{aspect-ratio:var(--ar, 1)}
+.stage video{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000}
+.card.cropped .stage video{inset:auto; object-fit:fill}
+.stage canvas{position:absolute; inset:0; width:100%; height:100%; pointer-events:none}
+.stage.drawing canvas{pointer-events:auto; cursor:crosshair; touch-action:none}
+.empty{
+  position:absolute; inset:0; color:var(--stage-ink); padding:16px 18px;
+  display:flex; flex-direction:column; justify-content:center; gap:10px; overflow:auto;
+}
+.empty .lead{margin:0; font-size:17px; font-weight:600}
+.empty .small{margin:0; color:#aab5ac; font-size:13px}
+.empty input{
+  flex:1 1 140px; min-width:0; font:inherit; color:var(--stage-ink); background:rgba(255,255,255,0.08);
+  border:1px solid rgba(255,255,255,0.18); border-radius:999px; padding:7px 12px;
+}
+.row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+.btn{
+  font:inherit; font-weight:600; font-size:13px; padding:7px 12px; border-radius:999px;
+  border:1px solid var(--line); background:transparent; color:var(--ink); cursor:pointer;
+  text-decoration:none; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;
+}
+.empty .btn{color:var(--stage-ink); border-color:rgba(255,255,255,0.25)}
+.btn:hover:not(:disabled){border-color:var(--accent)}
+.btn.primary{background:var(--accent); color:var(--accent-ink); border-color:transparent}
+.btn[aria-pressed="true"]{background:color-mix(in srgb, var(--accent) 18%, transparent); border-color:var(--accent)}
+.btn:disabled{opacity:.4; cursor:not-allowed}
+.btn.icon{padding:7px 10px; font-size:15px; line-height:1}
+#trackBtn.on{background:transparent; color:var(--ink); border-color:var(--accent)}
+#trackBtn.on::before{content:""; width:8px; height:8px; border-radius:50%; background:var(--accent)}
+.bar{display:flex; align-items:center; gap:6px; padding:8px 8px 4px; min-width:0; flex-wrap:wrap}
+.bar .spacer{flex:1}
+.hint{margin:0; padding:0 14px 9px; color:var(--muted); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hint.warn{color:var(--danger)}
+
+/* the ⋯ menu */
+.menu{
+  position:absolute; right:8px; bottom:72px; z-index:3;
+  width:250px; max-height:min(70vh, 520px); overflow:auto;
+  background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);
+  padding:6px; display:flex; flex-direction:column;
+}
+.menu button, .menu a{
+  font:inherit; text-align:left; background:none; border:0; color:var(--ink); padding:8px 10px;
+  border-radius:8px; cursor:pointer; text-decoration:none;
+}
+.menu button:hover, .menu a:hover{background:color-mix(in srgb, var(--ink) 7%, transparent)}
+.menu button[aria-pressed="true"]::after{content:" \2713"; color:var(--accent)}
+.menu label{display:flex; flex-direction:column; gap:4px; padding:6px 10px; color:var(--muted); font-size:12.5px}
+.menu select{font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 8px}
+.menu hr{border:0; border-top:1px solid var(--line); margin:4px 6px}
+
+@media (max-width:700px){
+  .card, .card.cropped, .card.expanded{left:10px; right:10px; width:auto}
+  .card.cropped{width:min(86vw, 340px); right:auto}
+}
+
+/* server version additions */
+.stage #yt, .stage iframe{position:absolute; inset:0; width:100%; height:100%; border:0}
+.card.cropped .stage #yt, .card.cropped .stage iframe, .card.cropped .stage video{inset:auto}
+.stage img.still{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000}
+.progress{height:3px; background:transparent}
+.progress span{display:block; height:100%; width:0; background:var(--accent); transition:width .4s ease}
+.empty form{display:flex; gap:8px; flex-wrap:wrap}
+.empty .or{display:flex; align-items:center; gap:8px; color:#aab5ac; font-size:13px}
+.empty .err{color:#f0a08c; margin:0; font-size:13px}
+</style>
+</head>
+<body>
+<div class="scene" id="scene" aria-label="3D chess board. Drag to rotate, pinch or scroll to zoom."></div>
+
+<aside class="card" id="card" aria-label="Video">
+  <div class="stage" id="stage">
+    <div id="yt"></div>
+    <video id="video" playsinline controls hidden></video>
+    <img class="still" id="still" alt="" hidden>
+    <canvas id="overlay"></canvas>
+    <div class="empty" id="empty">
+      <p class="lead">Follow a chess video in 3D</p>
+      <form id="urlForm">
+        <input type="url" id="ytUrl" placeholder="Paste a YouTube link" aria-label="YouTube link" required>
+        <button class="btn primary" style="color:var(--accent-ink)">Load</button>
+      </form>
+      <div class="or">or <button class="btn" id="fileBtn" type="button">upload a video file</button></div>
+      <p class="err" id="emptyErr" hidden></p>
+    </div>
+  </div>
+  <div class="progress" aria-hidden="true"><span id="progress"></span></div>
+  <div class="bar">
+    <button class="btn" id="cropBtn" aria-pressed="false" disabled title="Show only the board area of the video">Crop</button>
+    <button class="btn" id="fixBtn" aria-pressed="false" disabled title="Draw the board area yourself">Fix board area</button>
+    <span class="spacer"></span>
+    <button class="btn icon" id="moreBtn" aria-expanded="false" aria-controls="menu" aria-label="More options">&#8943;</button>
+  </div>
+  <p class="hint" id="hint" role="status" aria-live="polite">Paste a YouTube link to start.</p>
+  <div class="menu" id="menu" hidden>
+    <button id="newBtn">Another video</button>
+    <hr>
+    <label>Orientation in the video
+      <select id="orient">
+        <option value="auto">Detect</option>
+        <option value="w">White at bottom</option>
+        <option value="b">Black at bottom</option>
+      </select>
+    </label>
+    <button id="autoBtn">Find the board again automatically</button>
+    <hr>
+    <button id="flipBtn">Flip board</button>
+    <button id="copyBtn">Copy FEN</button>
+    <a id="lichessBtn" target="_blank" rel="noopener" href="#">Analyze on Lichess</a>
+  </div>
+  <input type="file" id="fileInput" accept="video/*" hidden>
+</aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const FILES = 'abcdefgh';
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+/* ---------- board helpers ---------- */
+function fenToBoard(fen){
+  const b = new Array(64).fill('.');
+  const rows = fen.split(' ')[0].split('/');
+  for (let r = 0; r < 8; r++){
+    let f = 0;
+    for (const ch of rows[r]){
+      if (ch >= '1' && ch <= '8') f += +ch;
+      else { b[(7 - r) * 8 + f] = ch; f++; }
+    }
+  }
+  return b;
+}
+function boardToPlacement(b){
+  let s = '';
+  for (let r = 7; r >= 0; r--){
+    let e = 0;
+    for (let f = 0; f < 8; f++){
+      const c = b[r * 8 + f];
+      if (c === '.' || c === '?') e++;
+      else { if (e){ s += e; e = 0; } s += c; }
+    }
+    if (e) s += e;
+    if (r) s += '/';
+  }
+  return s;
+}
+/* ---------- 3D board ---------- */
+const sceneEl = $('#scene');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputEncoding = THREE.sRGBEncoding;
+sceneEl.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
+const orbit = { az: 0, pol: 0.74, base: 13, zoom: 1, azTarget: 0 };
+
+scene.add(new THREE.HemisphereLight(0xf4f1e6, 0x2a3530, 0.42));
+const key = new THREE.DirectionalLight(0xfff4e0, 0.8);
+key.position.set(-5, 11, 6);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+Object.assign(key.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7, near: 1, far: 30 });
+key.shadow.bias = -0.0005;
+key.shadow.radius = 3;
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xd8e6ff, 0.28);
+fill.position.set(6, 5, -6);
+scene.add(fill);
+
+function canvasTex(size, draw){
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  draw(c.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(c);
+  t.encoding = THREE.sRGBEncoding;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+}
+const boardTex = canvasTex(1024, (g, n) => {
+  const q = n / 8;
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++){
+    g.fillStyle = (r + f) % 2 === 0 ? '#d9cdae' : '#56744f';
+    g.fillRect(f * q, r * q, q, q);
+  }
+  // faint vinyl grain
+  const img = g.getImageData(0, 0, n, n), d = img.data;
+  for (let i = 0; i < d.length; i += 4){ const k = (Math.random() - 0.5) * 7; d[i] += k; d[i + 1] += k; d[i + 2] += k; }
+  g.putImageData(img, 0, 0);
+});
+const frameTex = canvasTex(1152, (g, n) => {
+  g.fillStyle = '#1f2a24'; g.fillRect(0, 0, n, n);
+  const u = n / 9.2, off = 0.6 * u;
+  g.fillStyle = '#cfa95f';
+  g.font = `600 ${u * 0.3}px "Instrument Sans", system-ui, sans-serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (let i = 0; i < 8; i++){
+    const x = off + (i + 0.5) * u;
+    g.fillText(FILES[i], x, n - off / 2);
+    g.save(); g.translate(x, off / 2); g.rotate(Math.PI); g.fillText(FILES[i], 0, 0); g.restore();
+    const y = off + (7 - i + 0.5) * u;
+    g.fillText(String(i + 1), off / 2, y);
+    g.save(); g.translate(n - off / 2, y); g.rotate(Math.PI); g.fillText(String(i + 1), 0, 0); g.restore();
+  }
+});
+const frameSide = new THREE.MeshStandardMaterial({ color: 0x1b241f, roughness: 0.6 });
+const frame = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.42, 9.2), [
+  frameSide, frameSide, new THREE.MeshStandardMaterial({ map: frameTex, roughness: 0.55 }), frameSide, frameSide, frameSide,
+]);
+frame.position.y = -0.21; frame.receiveShadow = true; scene.add(frame);
+const top = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshStandardMaterial({ map: boardTex, roughness: 0.72 }));
+top.rotation.x = -Math.PI / 2; top.position.y = 0.002; top.receiveShadow = true; scene.add(top);
+
+const hlMat = new THREE.MeshBasicMaterial({ color: 0xcfa95f, transparent: true, opacity: 0.5, depthWrite: false });
+const hl = [0, 1].map(() => { const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), hlMat); m.rotation.x = -Math.PI / 2; m.position.y = 0.006; m.visible = false; scene.add(m); return m; });
+
+const sqPos = i => new THREE.Vector3((i % 8) - 3.5, 0, 3.5 - Math.floor(i / 8));
+const sqIndex = name => (+name[1] - 1) * 8 + FILES.indexOf(name[0]);
+
+/* piece geometry */
+const V2 = (r, y) => new THREE.Vector2(r, y);
+function arc(cy, rad, a0, a1, n = 10){
+  const pts = [];
+  for (let i = 0; i <= n; i++){ const a = a0 + (a1 - a0) * i / n; pts.push([Math.max(0, rad * Math.sin(a)), cy - rad * Math.cos(a)]); }
+  return pts;
+}
+const BASE = [[0, 0], [0.34, 0], [0.345, 0.04], [0.33, 0.07], [0.3, 0.09], [0.3, 0.11], [0.25, 0.13]];
+function lathe(pts){
+  const g = new THREE.LatheGeometry(pts.map(([r, y]) => V2(r, y)), 48);
+  g.computeVertexNormals();
+  return g;
+}
+const GEO = {};
+GEO.p = [lathe([...BASE, [0.2, 0.16], [0.14, 0.23], [0.11, 0.33], [0.1, 0.38], [0.165, 0.4], [0.165, 0.43], [0.085, 0.45], ...arc(0.545, 0.118, 0.8, Math.PI)])];
+GEO.r = (() => {
+  const body = lathe([...BASE, [0.23, 0.16], [0.2, 0.22], [0.18, 0.5], [0.22, 0.54], [0.25, 0.57], [0.25, 0.72], [0.17, 0.72], [0.17, 0.66], [0, 0.66]]);
+  const parts = [body];
+  for (let i = 0; i < 6; i++){
+    const b = new THREE.BoxGeometry(0.11, 0.08, 0.08);
+    b.translate(0, 0.76, 0.21);
+    b.rotateY(i * Math.PI / 3);
+    parts.push(b);
+  }
+  return parts;
+})();
+GEO.b = [lathe([...BASE, [0.21, 0.16], [0.14, 0.24], [0.1, 0.42], [0.17, 0.46], [0.17, 0.49], [0.1, 0.51],
+  ...arc(0.665, 0.16, 0.68, Math.PI * 0.92, 12).map(([r, y]) => [r * 0.9, y]), [0.03, 0.83], ...arc(0.875, 0.045, 0.6, Math.PI)])];
+GEO.q = (() => {
+  const body = lathe([...BASE, [0.22, 0.16], [0.15, 0.25], [0.11, 0.52], [0.11, 0.58], [0.2, 0.62], [0.2, 0.65], [0.12, 0.68],
+    [0.15, 0.74], [0.215, 0.84], [0.215, 0.865], [0.14, 0.87], [0.1, 0.92], ...arc(0.97, 0.055, 0.9, Math.PI)]);
+  const parts = [body];
+  for (let i = 0; i < 9; i++){
+    const s = new THREE.SphereGeometry(0.036, 12, 10);
+    s.translate(Math.cos(i * Math.PI * 2 / 9) * 0.2, 0.885, Math.sin(i * Math.PI * 2 / 9) * 0.2);
+    parts.push(s);
+  }
+  return parts;
+})();
+GEO.k = (() => {
+  const body = lathe([...BASE, [0.23, 0.16], [0.16, 0.25], [0.12, 0.54], [0.12, 0.63], [0.21, 0.67], [0.21, 0.7], [0.13, 0.73],
+    [0.17, 0.8], [0.205, 0.9], [0.205, 0.925], [0.11, 0.955], [0.06, 0.985], [0, 0.995]]);
+  const v = new THREE.BoxGeometry(0.06, 0.22, 0.06); v.translate(0, 1.09, 0);
+  const h = new THREE.BoxGeometry(0.17, 0.06, 0.06); h.translate(0, 1.11, 0);
+  return [body, v, h];
+})();
+GEO.n = (() => {
+  const base = lathe([...BASE, [0.23, 0.16], [0.21, 0.2], [0, 0.2]]);
+  const pts = [[-0.22, 0.17], [0.2, 0.17], [0.17, 0.27], [0.07, 0.4], [0.11, 0.46], [0.27, 0.5], [0.33, 0.56], [0.31, 0.63],
+    [0.15, 0.71], [0.09, 0.79], [0.04, 0.88], [-0.02, 0.81], [-0.1, 0.79], [-0.2, 0.68], [-0.25, 0.5], [-0.25, 0.3]];
+  const shape = new THREE.Shape(pts.map(([x, y]) => V2(x, y)));
+  const head = new THREE.ExtrudeGeometry(shape, { depth: 0.16, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.035, bevelSegments: 3, curveSegments: 6 });
+  head.translate(0, 0, -0.08);
+  head.computeVertexNormals();
+  return [base, head];
+})();
+const MAT = {
+  w: new THREE.MeshStandardMaterial({ color: 0xf1e8d4, roughness: 0.42, metalness: 0.02 }),
+  b: new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 0.3, metalness: 0.1 }),
+};
+function makePiece(ch){
+  const color = ch === ch.toUpperCase() ? 'w' : 'b';
+  const g = new THREE.Group();
+  for (const geo of GEO[ch.toLowerCase()]){
+    const m = new THREE.Mesh(geo, MAT[color]);
+    m.castShadow = true; m.receiveShadow = true;
+    g.add(m);
+  }
+  if (ch.toLowerCase() === 'n') g.rotation.y = color === 'w' ? Math.PI / 6 : Math.PI + Math.PI / 6;
+  g.userData.ch = ch;
+  return g;
+}
+
+/* sync 3D pieces to a board, animating the difference */
+const view = { board: new Array(64).fill('.'), meshes: new Array(64).fill(null) };
+const tweens = [];
+function sync3D(next, animate){
+  const old = view.board, meshes = view.meshes;
+  const removed = [], added = [];
+  for (let i = 0; i < 64; i++){
+    if (old[i] !== next[i]){ if (old[i] !== '.') removed.push(i); if (next[i] !== '.') added.push(i); }
+  }
+  const used = new Set(), nm = meshes.slice();
+  for (const r of removed) nm[r] = null;
+  const now = performance.now(), dur = animate ? (reduceMotion ? 120 : 420) : 0;
+  for (const a of added){
+    let bestR = -1, bestD = 1e9;
+    for (const r of removed){
+      if (used.has(r) || old[r] !== next[a]) continue;
+      const d = Math.hypot((r % 8) - (a % 8), (r >> 3) - (a >> 3));
+      if (d < bestD){ bestD = d; bestR = r; }
+    }
+    if (bestR >= 0){
+      used.add(bestR);
+      const g = meshes[bestR]; nm[a] = g;
+      const isKnight = next[a].toLowerCase() === 'n';
+      tweens.push({ obj: g, kind: 'move', from: g.position.clone(), to: sqPos(a), t0: now, dur, hop: reduceMotion ? 0 : (isKnight ? 0.55 : Math.min(0.25, 0.06 * bestD)) });
+    } else {
+      const g = makePiece(next[a]); g.position.copy(sqPos(a)); scene.add(g); nm[a] = g;
+      g.scale.setScalar(dur ? 0.001 : 1);
+      if (dur) tweens.push({ obj: g, kind: 'appear', t0: now + dur * 0.4, dur: dur * 0.8 });
+    }
+  }
+  for (const r of removed){
+    if (used.has(r)) continue;
+    const g = meshes[r];
+    if (!g) continue;
+    if (dur) tweens.push({ obj: g, kind: 'vanish', t0: now + dur * 0.55, dur: dur * 0.6 });
+    else scene.remove(g);
+  }
+  view.board = next.slice(); view.meshes = nm;
+  dirty = true;
+}
+function runTweens(now){
+  for (let i = tweens.length - 1; i >= 0; i--){
+    const t = tweens[i];
+    const k = t.dur ? Math.min(1, Math.max(0, (now - t.t0) / t.dur)) : 1;
+    if (now < t.t0 && t.kind !== 'move') continue;
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    if (t.kind === 'move'){
+      t.obj.position.lerpVectors(t.from, t.to, e);
+      t.obj.position.y = Math.sin(Math.PI * e) * t.hop;
+    } else if (t.kind === 'appear'){
+      t.obj.scale.setScalar(Math.max(0.001, e));
+    } else if (t.kind === 'vanish'){
+      t.obj.scale.setScalar(Math.max(0.001, 1 - e));
+      t.obj.position.y = -0.25 * e;
+    }
+    if (k >= 1){
+      if (t.kind === 'vanish') scene.remove(t.obj);
+      tweens.splice(i, 1);
+    }
+  }
+}
+
+/* camera orbit */
+function placeCamera(){
+  const sp = Math.sin(orbit.pol);
+  const d = orbit.base * orbit.zoom;
+  camera.position.set(d * sp * Math.sin(orbit.az), d * Math.cos(orbit.pol), d * sp * Math.cos(orbit.az));
+  camera.lookAt(0, -0.35, 0.45 * Math.cos(orbit.az));
+}
+let drag = null;
+const cv = renderer.domElement;
+cv.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY };
+  orbit.az -= dx * 0.008; orbit.azTarget = orbit.az;
+  orbit.pol = Math.min(1.32, Math.max(0.12, orbit.pol - dy * 0.006));
+  dirty = true;
+});
+cv.addEventListener('pointerup', () => { drag = null; });
+cv.addEventListener('wheel', e => { e.preventDefault(); orbit.zoom = Math.min(1.7, Math.max(0.55, orbit.zoom * (1 + Math.sign(e.deltaY) * 0.08))); dirty = true; }, { passive: false });
+$('#flipBtn').onclick = () => { orbit.azTarget = orbit.az + Math.PI; if (reduceMotion) orbit.az = orbit.azTarget; };
+
+function resize3D(){
+  const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  const aspect = w / h;
+  camera.aspect = aspect;
+  // Fill the height on wide screens; back off on narrow ones so the whole board fits.
+  orbit.base = 14.2 * Math.max(1, 1.45 / aspect);
+  // On wide screens, slide the board right to leave room for the video card.
+  const wide = aspect > 1.15 && w > 700;
+  // Wide: slide the board right, beside the video card. Tall: lift it above the card.
+  if (wide) camera.setViewOffset(w, h, -Math.round(w * 0.085), 0, w, h);
+  else if (aspect < 0.9) camera.setViewOffset(w, h, 0, Math.round(h * 0.2), w, h);
+  else camera.clearViewOffset();
+  camera.updateProjectionMatrix();
+  dirty = true;
+}
+new ResizeObserver(resize3D).observe(sceneEl);
+let dirty = true;
+function loop(now){
+  let moving = false;
+  if (Math.abs(orbit.azTarget - orbit.az) > 0.001){ orbit.az += (orbit.azTarget - orbit.az) * 0.12; moving = true; }
+  if (tweens.length){ runTweens(now); moving = true; }
+  if (moving || dirty){
+    placeCamera();
+    renderer.render(scene, camera);
+    dirty = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+
+/* ---------- app ---------- */
+const S = { job: null, gen: null, events: [], status: null, region: null, W: 0, H: 0, duration: 0, progress: 0,
+  source: null, videoId: null, cropped: false, idx: -2, fen: START_FEN, pollTimer: null, fixing: false,
+  player: null, playerReady: false };
+const stage = $('#stage'), card = $('#card'), video = $('#video'), still = $('#still');
+const overlay = $('#overlay'), octx = overlay.getContext('2d'), hintEl = $('#hint');
+function hint(m, warn){ hintEl.textContent = m; hintEl.title = m; hintEl.classList.toggle('warn', !!warn); }
+const mmss = t => { t = Math.max(0, Math.floor(t)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); };
+
+/* players: YouTube's own embedded player, or a <video> for uploads */
+function playerTime(){
+  if (S.source === 'youtube' && S.player && S.playerReady) return S.player.getCurrentTime() || 0;
+  if (S.source === 'upload') return video.currentTime || 0;
+  return 0;
+}
+function pausePlayer(){
+  try { if (S.source === 'youtube' && S.playerReady) S.player.pauseVideo(); } catch (e) {}
+  if (S.source === 'upload') video.pause();
+}
+function loadYouTubeAPI(){
+  return new Promise(res => {
+    if (window.YT && window.YT.Player) return res();
+    window.onYouTubeIframeAPIReady = res;
+    const s = document.createElement('script');
+    s.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(s);
+  });
+}
+async function showYouTube(id){
+  await loadYouTubeAPI();
+  const el = $('#yt'); if (el) el.style.display = '';
+  if (S.player){ S.player.loadVideoById(id); return; }
+  S.player = new YT.Player('yt', {
+    videoId: id, width: '100%', height: '100%',
+    playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
+    events: { onReady: () => { S.playerReady = true; layoutPlayer(); } },
+  });
+}
+
+/* starting a job */
+function resetAll(){
+  clearTimeout(S.pollTimer);
+  Object.assign(S, { job: null, gen: null, events: [], status: null, region: null, W: 0, H: 0, duration: 0,
+    progress: 0, source: null, videoId: null, idx: -2, fen: START_FEN });
+  endFix(true);
+  setCrop(false);
+  try { if (S.player && S.playerReady) S.player.stopVideo(); } catch (e) {}
+  const yt = $('#yt'); if (yt) yt.style.display = 'none';
+  video.pause(); video.removeAttribute('src'); video.load(); video.hidden = true;
+  $('#progress').style.width = '0';
+  sync3D(fenToBoard(START_FEN), false); highlight(null);
+  updateButtons();
+}
+function showEmpty(err){
+  resetAll();
+  $('#empty').hidden = false;
+  $('#emptyErr').hidden = !err; $('#emptyErr').textContent = err || '';
+  history.replaceState(null, '', location.pathname);
+  hint('Paste a YouTube link to start.');
+}
+async function startYouTube(url){
+  resetAll();
+  let r;
+  try { r = await fetch('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) }); }
+  catch (e) { return showEmpty('Can\u2019t reach the server.'); }
+  if (!r.ok) return showEmpty(r.status === 400 ? 'That doesn\u2019t look like a YouTube video link.' : 'The server couldn\u2019t start on that video.');
+  const j = await r.json();
+  Object.assign(S, { job: j.id, source: 'youtube', videoId: j.video_id });
+  history.replaceState(null, '', '#job=' + j.id + '&v=' + j.video_id);
+  $('#empty').hidden = true;
+  showYouTube(j.video_id);
+  poll();
+}
+function startUpload(file){
+  resetAll();
+  S.source = 'upload';
+  video.src = URL.createObjectURL(file); video.hidden = false;
+  $('#empty').hidden = true;
+  const xhr = new XMLHttpRequest(), fd = new FormData();
+  fd.append('file', file);
+  xhr.upload.onprogress = e => { if (e.lengthComputable){ $('#progress').style.width = (100 * e.loaded / e.total) + '%'; hint('Uploading\u2026 ' + Math.round(100 * e.loaded / e.total) + '%'); } };
+  xhr.onload = () => {
+    if (xhr.status !== 200) return showEmpty(xhr.status === 413 ? 'That file is too large for this server.' : 'The server couldn\u2019t read that video.');
+    const j = JSON.parse(xhr.responseText);
+    S.job = j.id;
+    history.replaceState(null, '', '#job=' + j.id);
+    poll();
+  };
+  xhr.onerror = () => showEmpty('Upload failed. Check your connection and try again.');
+  xhr.open('POST', '/api/upload'); xhr.send(fd);
+  hint('Uploading\u2026');
+}
+async function resume(){
+  const p = new URLSearchParams(location.hash.slice(1));
+  const jid = p.get('job'), v = p.get('v');
+  if (!jid) return;
+  const r = await fetch('/api/jobs/' + jid).catch(() => null);
+  if (!r || !r.ok){ if (v) return startYouTube('https://youtu.be/' + v); return; }
+  const j = await r.json();
+  S.job = jid; S.source = j.source; S.videoId = j.video_id;
+  $('#empty').hidden = true;
+  if (j.source === 'youtube') showYouTube(j.video_id);
+  else { video.src = '/api/jobs/' + jid + '/video'; video.hidden = false; }
+  poll();
+}
+
+/* polling the server for new positions */
+const ERRORS = {
+  no_board: 'Couldn\u2019t find a chessboard in this video. Press Fix board area and draw it.',
+  youtube_blocked: 'YouTube refused to let the server download this video (see the README about cookies).',
+  too_long: 'This video is longer than the server allows.',
+  download_failed: 'The server couldn\u2019t download this video.',
+};
+async function poll(){
+  clearTimeout(S.pollTimer);
+  if (!S.job) return;
+  const jid = S.job;
+  let j;
+  try {
+    const r = await fetch(`/api/jobs/${jid}?since=${S.events.length}`);
+    if (r.status === 404) return showEmpty('The server restarted and forgot this video. Load it again.');
+    j = await r.json();
+  } catch (e) { S.pollTimer = setTimeout(poll, 3000); return; }
+  if (jid !== S.job) return;
+  if (S.gen !== null && j.gen !== S.gen){ S.gen = j.gen; S.events = []; S.idx = -2; return poll(); }
+  S.gen = j.gen;
+  for (const e of j.events){
+    const prevT = S.events.length ? S.events[S.events.length - 1].t : 0;
+    S.events.push({ ...e, t: Math.max(e.t, prevT) });
+  }
+  const hadRegion = !!S.region;
+  S.region = j.region; S.W = j.width || S.W; S.H = j.height || S.H; S.duration = j.duration || S.duration;
+  S.progress = j.progress || 0; S.status = j.status; S.statusError = j.error;
+  if (!hadRegion && S.region) layoutPlayer();
+  if (j.orientation && $('#orient').value !== j.orientation) $('#orient').value = j.orientation;
+  if (j.white_bottom !== null && j.orientation === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (j.white_bottom ? 'White' : 'Black') + ' at bottom)';
+  $('#progress').style.width = (j.status === 'downloading' ? 100 * (j.download || 0) : 100 * S.progress) + '%';
+  updateButtons();
+  statusHint();
+  if (j.status === 'done' || j.status === 'error') return;
+  S.pollTimer = setTimeout(poll, 1000);
+}
+function statusHint(){
+  if (S.fixing) return;
+  const moves = S.events.filter(e => e.san).length;
+  switch (S.status){
+    case 'queued': return hint('Waiting for the server\u2026');
+    case 'downloading': return hint('The server is fetching the video\u2026');
+    case 'finding_board': return hint('Looking for the chessboard\u2026');
+    case 'processing': {
+      const done = S.progress * S.duration;
+      return hint(`Reading moves: ${mmss(done)} of ${mmss(S.duration)} analyzed. You can press play now.`);
+    }
+    case 'done': return hint(moves ? `Ready. ${moves} move${moves > 1 ? 's' : ''} found.` : 'Ready.');
+    case 'error': return hint(ERRORS[S.statusError] || 'Something went wrong while reading this video.', true);
+  }
+}
+
+/* keep the 3D board in step with the video */
+function eventAt(t){
+  let lo = 0, hi = S.events.length - 1, ans = -1;
+  while (lo <= hi){ const mid = (lo + hi) >> 1; if (S.events[mid].t <= t){ ans = mid; lo = mid + 1; } else hi = mid - 1; }
+  return ans;
+}
+function highlight(ev){
+  if (ev && ev.from && ev.to){
+    hl[0].position.set(sqPos(sqIndex(ev.from)).x, 0.006, sqPos(sqIndex(ev.from)).z);
+    hl[1].position.set(sqPos(sqIndex(ev.to)).x, 0.006, sqPos(sqIndex(ev.to)).z);
+    hl[0].visible = hl[1].visible = true;
+  } else hl[0].visible = hl[1].visible = false;
+  dirty = true;
+}
+setInterval(() => {
+  if (!S.job) return;
+  const t = playerTime() + 0.1;
+  const i = eventAt(t);
+  if (i !== S.idx){
+    const step = i === S.idx + 1;
+    S.idx = i;
+    const ev = i >= 0 ? S.events[i] : null;
+    S.fen = ev ? ev.fen : START_FEN;
+    sync3D(fenToBoard(S.fen), step);
+    highlight(ev);
+    $('#lichessBtn').href = 'https://lichess.org/analysis/standard/' + S.fen.replace(/ /g, '_');
+  }
+  if (S.status === 'processing' && !S.fixing){
+    const done = S.progress * S.duration;
+    if (t > done + 2) hint(`Still reading this part of the video (analyzed up to ${mmss(done)}).`);
+    else statusHint();
+  }
+}, 150);
+
+/* crop the card to the board */
+function contentBox(){
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  if (!S.W || !S.H) return null;
+  if (S.cropped && S.region){ const s = sw / S.region[2]; return { x: -S.region[0] * s, y: -S.region[1] * s, s }; }
+  const s = Math.min(sw / S.W, sh / S.H);
+  return { x: (sw - S.W * s) / 2, y: (sh - S.H * s) / 2, s };
+}
+function layoutPlayer(){
+  const els = [$('#yt'), video].filter(Boolean);
+  const cb = contentBox();
+  for (const el of els){
+    if (S.cropped && cb){
+      Object.assign(el.style, { left: cb.x + 'px', top: cb.y + 'px', width: S.W * cb.s + 'px', height: S.H * cb.s + 'px' });
+      if (el === video) video.controls = false;
+    } else {
+      el.style.left = el.style.top = el.style.width = el.style.height = '';
+      if (el === video) video.controls = true;
+    }
+  }
+  resizeOverlay();
+}
+function setCrop(on){
+  S.cropped = on && !!S.region;
+  card.classList.toggle('cropped', S.cropped);
+  $('#cropBtn').setAttribute('aria-pressed', S.cropped ? 'true' : 'false');
+  if (S.cropped) card.style.setProperty('--ar', (S.region[2] / S.region[3]).toFixed(4));
+  layoutPlayer();
+}
+$('#cropBtn').onclick = () => { endFix(true); setCrop(!S.cropped); };
+stage.addEventListener('click', () => {
+  if (S.cropped && S.source === 'upload' && !S.fixing) video.paused ? video.play() : video.pause();
+});
+
+/* overlay: board outline, and drawing a board box by hand */
+function resizeOverlay(){
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  overlay.width = Math.round(stage.clientWidth * dpr); overlay.height = Math.round(stage.clientHeight * dpr);
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawOverlay();
+}
+new ResizeObserver(() => layoutPlayer()).observe(stage);
+let dragBox = null, dragStart = null;
+function drawOverlay(){
+  const w = stage.clientWidth, h = stage.clientHeight;
+  octx.clearRect(0, 0, w, h);
+  const cb = contentBox();
+  if (!cb) return;
+  let r = dragBox;
+  if (!r && S.region && (S.fixing || !S.cropped)) r = { x: cb.x + S.region[0] * cb.s, y: cb.y + S.region[1] * cb.s, w: S.region[2] * cb.s, h: S.region[3] * cb.s };
+  if (!r) return;
+  if (S.fixing){
+    octx.fillStyle = 'rgba(8,12,10,0.45)';
+    octx.beginPath(); octx.rect(0, 0, w, h); octx.rect(r.x, r.y, r.w, r.h); octx.fill('evenodd');
+  }
+  octx.strokeStyle = '#cfa95f'; octx.lineWidth = S.fixing ? 2 : 1.5;
+  octx.strokeRect(r.x, r.y, r.w, r.h);
+}
+async function startFix(){
+  if (!S.job || S.fixing) return endFix(true);
+  pausePlayer(); setCrop(false);
+  S.fixing = true;
+  card.classList.add('expanded'); stage.classList.add('drawing');
+  $('#fixBtn').setAttribute('aria-pressed', 'true');
+  still.src = `/api/jobs/${S.job}/frame.jpg?t=${playerTime().toFixed(2)}`;
+  still.hidden = false;
+  hint('Drag a box around the board\u2019s 8\u00d78 squares.');
+  drawOverlay();
+}
+function endFix(silent){
+  S.fixing = false; dragBox = dragStart = null;
+  card.classList.remove('expanded'); stage.classList.remove('drawing');
+  $('#fixBtn').setAttribute('aria-pressed', 'false');
+  still.hidden = true;
+  drawOverlay();
+  if (!silent) statusHint();
+}
+$('#fixBtn').onclick = startFix;
+overlay.addEventListener('pointerdown', e => {
+  if (!S.fixing) return;
+  const b = overlay.getBoundingClientRect();
+  dragStart = { x: e.clientX - b.left, y: e.clientY - b.top };
+  dragBox = { ...dragStart, w: 0, h: 0 };
+  overlay.setPointerCapture(e.pointerId);
+});
+overlay.addEventListener('pointermove', e => {
+  if (!dragStart) return;
+  const b = overlay.getBoundingClientRect(), x = e.clientX - b.left, y = e.clientY - b.top;
+  dragBox = { x: Math.min(x, dragStart.x), y: Math.min(y, dragStart.y), w: Math.abs(x - dragStart.x), h: Math.abs(y - dragStart.y) };
+  drawOverlay();
+});
+overlay.addEventListener('pointerup', async () => {
+  if (!dragStart) return;
+  const d = dragBox, cb = contentBox();
+  dragStart = null; dragBox = null;
+  if (!d || d.w < 20 || d.h < 20 || !cb){ drawOverlay(); return; }
+  const box = { x: Math.max(0, (d.x - cb.x) / cb.s), y: Math.max(0, (d.y - cb.y) / cb.s), w: d.w / cb.s, h: d.h / cb.s };
+  S.region = [box.x, box.y, box.w, box.h];
+  endFix(true);
+  await restartWith(box);
+});
+async function restartWith(body){
+  if (!S.job) return;
+  S.events = []; S.idx = -2;
+  hint('Reading the video again with the new settings\u2026');
+  await fetch(`/api/jobs/${S.job}/board`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
+  S.gen = null;
+  poll();
+}
+
+/* buttons and menu */
+function updateButtons(){
+  $('#cropBtn').disabled = !S.region;
+  $('#fixBtn').disabled = !S.job || !['processing', 'done', 'error'].includes(S.status);
+}
+$('#urlForm').addEventListener('submit', e => { e.preventDefault(); startYouTube($('#ytUrl').value.trim()); });
+$('#fileBtn').onclick = () => $('#fileInput').click();
+$('#fileInput').onchange = e => { const f = e.target.files && e.target.files[0]; if (f) startUpload(f); e.target.value = ''; };
+$('#newBtn').onclick = () => showEmpty();
+$('#orient').onchange = e => restartWith(S.region ? { x: S.region[0], y: S.region[1], w: S.region[2], h: S.region[3], orientation: e.target.value } : { auto: true, orientation: e.target.value });
+$('#autoBtn').onclick = () => { S.region = null; setCrop(false); restartWith({ auto: true, orientation: $('#orient').value }); };
+$('#copyBtn').onclick = async () => {
+  try { await navigator.clipboard.writeText(S.fen); hint('FEN copied.'); } catch (e) { hint(S.fen); }
+};
+const menu = $('#menu'), moreBtn = $('#moreBtn');
+function closeMenu(){ menu.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); }
+moreBtn.onclick = e => { e.stopPropagation(); const open = menu.hidden; menu.hidden = !open; moreBtn.setAttribute('aria-expanded', open ? 'true' : 'false'); };
+document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeMenu(); if (S.fixing) endFix(); } });
+menu.addEventListener('click', e => { if (e.target.closest('button')) setTimeout(closeMenu, 0); });
+
+/* pinch to zoom the 3D board on touch screens */
+const touches = new Map();
+let pinch0 = null;
+cv.addEventListener('pointerdown', e => { touches.set(e.pointerId, e); if (touches.size === 2){ drag = null; const [a, b] = [...touches.values()]; pinch0 = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), z: orbit.zoom }; } });
+cv.addEventListener('pointermove', e => {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, e);
+  if (pinch0 && touches.size === 2){
+    drag = null;
+    const [a, b] = [...touches.values()];
+    const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    orbit.zoom = Math.min(1.7, Math.max(0.55, pinch0.z * pinch0.d / Math.max(d, 1)));
+    dirty = true;
+  }
+});
+const endTouch = e => { touches.delete(e.pointerId); if (touches.size < 2) pinch0 = null; };
+cv.addEventListener('pointerup', endTouch); cv.addEventListener('pointercancel', endTouch);
+
+sync3D(fenToBoard(START_FEN), false);
+resize3D();
+requestAnimationFrame(loop);
+updateButtons();
+resume();
+window.__sb = { S, playerTime };
+})();
+</script>
+</body>
+</html>
