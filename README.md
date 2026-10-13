@@ -79,6 +79,14 @@ you open never leave your device.
   Stationery Supplies, Round Spectacles, Digital Wrist Watch, Potted Plant 04, Croissant, Food
   Apple 01, Magnifying Glass 01 and Vintage Pocket Watch, packed into `static/props.glb` (880 KB,
   loaded after the pieces) by `tools/make_props.py`.
+- The start card offers two series to pick an episode from: GothamChess's Slowrun (from
+  [a playlist a viewer keeps](https://www.youtube.com/playlist?list=PLxH8DZpY_FC4vPjn-dz0-VmcZwmiuKWRa), as
+  GothamChess has none of his own for it) and Hikaru's
+  [Master Slowkaru](https://www.youtube.com/playlist?list=PL4KCWZ5Ti2H4hFLv7HBwVzYflOrUZ3qum). The server
+  fetches the playlists with yt-dlp at most every 12 hours (`GET /api/series`, kept in the data folder);
+  until it has, or if YouTube refuses, it uses `static/series.json` (refresh it with `python app.py series`).
+  Episodes someone has already read are marked Ready, the ones opened in this browser are marked
+  watched, and the list starts at the next one. Change the series in `SERIES` in `app.py`.
 - The camera bar at the top right: auto-rotate (a very slow swing, about 25° left and right, remembered in the
   browser), views (overview, top down, player's eye, from the side, the whole table) and a button
   to look from the other side.
