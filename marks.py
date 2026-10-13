@@ -110,25 +110,28 @@ def _build_candidates():
             if {abs(dr), abs(dc)} == {1, 2}:  # chess.com: knight arrows as an L, long leg first
                 corner = (b[0], a[1]) if abs(dr) == 2 else (a[0], b[1])
                 cand.append((a, b, corner, [_centre(a), _centre(corner), _centre(b)]))
+    # pixel coordinates are rounded as each candidate is built: kept as floats until the
+    # end, the tables briefly take over 100 MB
+    ix = lambda a: np.clip(np.rint(a), 0, 255).astype(np.int16)
     line, side, prof, frac, back, over = [], [], [], [], [], []
     for _, _, _, pts in cand:
         L = sum(float(np.linalg.norm(np.subtract(q, p))) for p, q in zip(pts, pts[1:]))
         p, _, _ = _polyline_samples(pts, np.linspace(0.2 * S, L - 0.3 * S, K_LINE))
-        line.append(p)
+        line.append(ix(p))
         # the strip beside the shaft should be clear (rules out tinted whole squares)
         p, _, n = _polyline_samples(pts, np.linspace(0.2 * S, max(0.2 * S, L - 0.6 * S), K_SIDE))
-        side.append(np.concatenate([p + 0.42 * S * n, p - 0.42 * S * n]))
+        side.append(ix(np.concatenate([p + 0.42 * S * n, p - 0.42 * S * n])))
         # cross-sections along the shaft and, closely spaced whatever the length, the head
         at = np.concatenate([np.linspace(0.15 * S, L - 0.6 * S, K_SHAFT), L - np.linspace(0.55, 0.08, K_HEAD) * S])
         p, _, n = _polyline_samples(pts, at)
-        prof.append(p[:, None] + W_STEPS[None, :, None] * n[:, None])
+        prof.append(ix(p[:, None] + W_STEPS[None, :, None] * n[:, None]))
         frac.append(at / L)
         # an arrow begins at a centre, so just behind the start should be clear; and it
         # stops at one, so the line shouldn't carry on for most of another square
-        back.append(_polyline_samples(pts, np.array([-0.45 * S]))[0])
-        over.append(_polyline_samples(pts, L + np.array([0.45, 0.7, 0.95]) * S)[0])
-    ix = lambda a: np.clip(np.rint(np.asarray(a)), 0, 255).astype(np.int16)
-    return cand, ix(line), ix(side), ix(prof), np.array(frac, np.float32), ix(back), ix(over)
+        back.append(ix(_polyline_samples(pts, np.array([-0.45 * S]))[0]))
+        over.append(ix(_polyline_samples(pts, L + np.array([0.45, 0.7, 0.95]) * S)[0]))
+    return (cand, np.stack(line), np.stack(side), np.stack(prof), np.array(frac, np.float32), np.stack(back),
+            np.stack(over))
 
 
 _CAND = None

@@ -7,7 +7,7 @@
    legal moves (python-chess) so a shaky square can't derail the game
 4. alongside, pick out the arrows and circles streamers draw on the board (marks.py)
 """
-import json, math, subprocess
+import json, math, os, subprocess
 import numpy as np
 import cv2
 import chess
@@ -16,6 +16,9 @@ import marks
 from recognizer import Recognizer, board_tiles, CLASSES
 
 FPS = 3.0
+# ffmpeg starts a decoding thread, each with its own frames, per core it can see; in a
+# container that is often every core of the host, whatever the memory limit
+DECODE = ['-threads', str(min(4, len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else 4))]
 _rec = None
 
 
@@ -47,8 +50,10 @@ def frames(path, fps, crop=None, size=None):
     if size:
         vf.append(f'scale={size[0]}:{size[1]}:flags=area')
         w, h = size
-    p = subprocess.Popen(['ffmpeg', '-v', 'error', '-i', path, '-vf', ','.join(vf), '-f', 'rawvideo',
-                          '-pix_fmt', 'rgb24', '-'], stdout=subprocess.PIPE)
+    # frames nothing else is predicted from (most B-frames) needn't be decoded: that halves
+    # the decoding work, and the frame read for each sample moves by a frame or two at most
+    p = subprocess.Popen(['ffmpeg', '-v', 'error', *DECODE, '-skip_frame', 'noref', '-i', path, '-an', '-sn',
+                          '-vf', ','.join(vf), '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], stdout=subprocess.PIPE)
     n, k = w * h * 3, 0
     try:
         while True:
@@ -63,17 +68,27 @@ def frames(path, fps, crop=None, size=None):
 
 
 def frame_at(path, t):
-    out = subprocess.run(['ffmpeg', '-v', 'error', '-ss', str(max(0, t)), '-i', path, '-frames:v', '1',
+    out = subprocess.run(['ffmpeg', '-v', 'error', *DECODE, '-ss', str(max(0, t)), '-i', path, '-frames:v', '1',
                           '-f', 'image2', '-c:v', 'mjpeg', '-q:v', '4', '-'], capture_output=True)
     return out.stdout
 
 
+def rgb_at(path, t):
+    """The frame at t as an RGB array (None if there is none)."""
+    img = cv2.imdecode(np.frombuffer(frame_at(path, t), np.uint8), cv2.IMREAD_COLOR)
+    return None if img is None else cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+
 # ---------------------------------------------------------------- board detection
+SEARCH_LINES = 720  # bigger frames are searched shrunk to this; refine() then works at full size
+
+
 def checker_search(rgb):
     """Best (score, x, y, cell) for an 8x8 checkerboard of integer cell size."""
-    lum = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float64)
+    lum = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     H, W = lum.shape
-    ii = cv2.integral(lum)  # (H+1, W+1)
+    # (H+1, W+1); integers keep it exact and fast, up to 4K where the sums outgrow int32
+    ii = cv2.integral(lum, sdepth=cv2.CV_32S if H * W * 255 < 2 ** 31 else cv2.CV_64F)
     best = (0.0, 0, 0, 0)
     for c in range(max(6, int(min(H, W) * 0.035)), min(H, W) // 8 + 1):
         # sum of every c x c box, indexed by its top-left corner
@@ -81,15 +96,21 @@ def checker_search(rgb):
         ny, nx = B.shape[0] - 7 * c, B.shape[1] - 7 * c
         if ny <= 0 or nx <= 0:
             continue
-        R = np.zeros((ny, nx))
-        for r in range(8):
-            for f in range(8):
-                R += (1 if (r + f) % 2 == 0 else -1) * B[r * c:r * c + ny, f * c:f * c + nx]
-        R = np.abs(R) / (64 * c * c)  # mean light/dark luminance gap
-        i = int(R.argmax())
-        y, x = divmod(i, nx)
-        if R.flat[i] > best[0]:
-            best = (float(R.flat[i]), x, y, c)
+        # the checkerboard's +-1 pattern is (-1)^row * (-1)^file, so sum along the files
+        # first and then down the rows: 16 passes over the image instead of 64
+        C = B[:, :nx].copy()
+        for f in range(1, 8):
+            if f % 2: C -= B[:, f * c:f * c + nx]
+            else: C += B[:, f * c:f * c + nx]
+        R = C[:ny].copy()
+        for r in range(1, 8):
+            if r % 2: R -= C[r * c:r * c + ny]
+            else: R += C[r * c:r * c + ny]
+        i = int(np.abs(R, out=R).argmax())
+        v = R.flat[i] / (64 * c * c)  # mean light/dark luminance gap
+        if v > best[0]:
+            y, x = divmod(i, nx)
+            best = (float(v), x, y, c)
     return best
 
 
@@ -141,22 +162,26 @@ def detect_board(path, duration, samples=12):
     found = []
     for i in range(samples):
         t = duration * (i + 0.5) / samples
-        jpg = frame_at(path, t)
-        img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
+        rgb = rgb_at(path, t)
+        if rgb is None:
             continue
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        H, W = rgb.shape[:2]
+        if min(H, W) > SEARCH_LINES:
+            k = SEARCH_LINES / min(H, W)
+            rgb = cv2.resize(rgb, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA)
+        kx, ky = rgb.shape[1] / W, rgb.shape[0] / H
         score, x, y, c = checker_search(rgb)
         if score > 12 and c:
-            found.append((score, (float(x), float(y), 8.0 * c, 8.0 * c), rgb))
+            found.append((score, (x / kx, y / ky, 8.0 * c / kx, 8.0 * c / ky), t))
     if not found:
         return None
     # vote: boxes that agree with many others win; then refine the strongest of them
     def close(a, b):
         return all(abs(a[i] - b[i]) < 0.04 * a[2] for i in range(4))
     votes = [sum(close(f[1], g[1]) for g in found) + f[0] / 1000 for f in found]
-    score, box, rgb = found[int(np.argmax(votes))]
-    return refine(rgb, box)
+    score, box, t = found[int(np.argmax(votes))]
+    # only the winner's frame is needed again: fetch it rather than hold every full-size frame
+    return refine(rgb_at(path, t), box)
 
 
 # ---------------------------------------------------------------- readings -> positions
@@ -181,8 +206,28 @@ def to_board(b):
     return bd
 
 
+# (piece type, colour) in CLASSES[1:] order
+PIECES = [(pt, colour) for colour in (chess.WHITE, chess.BLACK) for pt in range(chess.PAWN, chess.KING + 1)]
+
+
+def bitboards(board):
+    """One bitboard per class in CLASSES[1:] order."""
+    return [board.pieces_mask(pt, colour) for pt, colour in PIECES]
+
+
+def class_grid(bbs):
+    """(N,12) bitboards -> (N,64) class index of each square, a1..h8."""
+    bits = np.unpackbits(np.asarray(bbs, '<u8').reshape(-1, 12).view(np.uint8).reshape(-1, 12, 8), axis=2,
+                         bitorder='little')  # N,12,64
+    return (bits * np.arange(1, 13, dtype=np.uint8)[:, None]).sum(axis=1)
+
+
 def key_of(board):
-    return ''.join((board.piece_at(sq).symbol() if board.piece_at(sq) else '.') for sq in range(64))
+    out = ['.'] * 64
+    for sym, (pt, colour) in zip(CLASSES[1:], PIECES):
+        for sq in chess.scan_forward(board.pieces_mask(pt, colour)):
+            out[sq] = sym
+    return ''.join(out)
 
 
 def infer_castling(b):
@@ -209,14 +254,14 @@ class Follower:
         idx = [CLASSES.index(c) for c in key]
         return float(np.log(raw[np.arange(64), idx] + 1e-4).sum())
 
-    def _legal(self, base):
-        out = []
+    @staticmethod
+    def _children(base, bbs, line, out):
+        """Append the bitboards after every legal move from base to bbs, its moves to out."""
         for mv in list(base.legal_moves):
-            san = base.san(mv)
-            nb = base.copy(stack=False)
-            nb.push(mv)
-            out.append((nb, [(san, mv)]))
-        return out
+            base.push(mv)
+            bbs.append(bitboards(base))
+            base.pop()
+            out.append(line + [mv])
 
     def _commit(self, D, last_color, raw, t):
         key = ''.join(D)
@@ -229,16 +274,22 @@ class Follower:
             sw.ep_square = None
             if sw.is_valid():
                 bases.append(sw)
+        # every position one move away (from either side to move) and two moves away,
+        # scored together; the earliest best wins, as when they were tried one by one
+        bbs, lines, penalty = [], [], []
         for i, base in enumerate(bases):
-            for nb, steps in self._legal(base):
-                v = self._ll(key_of(nb), raw) - (0.5 if i else 0)
-                if best is None or v > best[0]:
-                    best = (v, nb, steps)
-        for nb1, s1 in self._legal(prev):
-            for nb2, s2 in self._legal(nb1):
-                v = self._ll(key_of(nb2), raw) - 1
-                if v > best[0]:
-                    best = (v, nb2, s1 + s2)
+            self._children(base, bbs, [], lines)
+            penalty += [0.5 if i else 0.0] * (len(lines) - len(penalty))
+        for mv in list(prev.legal_moves):
+            prev.push(mv)
+            self._children(prev, bbs, [mv], lines)
+            prev.pop()
+        penalty += [1.0] * (len(lines) - len(penalty))
+        if lines:
+            logp = np.log(raw + 1e-4)
+            v = logp[np.arange(64), class_grid(bbs)].sum(axis=1).astype(np.float64) - penalty
+            i = int(v.argmax())
+            best = (float(v[i]), lines[i])
         llD = self._ll(key, raw)
         hist_i = next((i for i in range(len(self.hist) - 2, -1, -1) if key_of(self.hist[i]) == key), -1)
         if hist_i >= 0 and (best is None or best[0] < llD):
@@ -247,13 +298,14 @@ class Follower:
             self.events.append({'t': t, 'fen': self.board.fen(), 'san': None, 'from': None, 'to': None})
             return
         if best and best[0] >= llD - 4:
-            v, nb, steps = best
+            v, steps = best
             # replay to get each intermediate position
             cur = prev.copy(stack=False)
-            if len(steps) == 1 and steps[0][1] not in cur.legal_moves:
+            if len(steps) == 1 and steps[0] not in cur.legal_moves:
                 cur.turn = not cur.turn
                 cur.ep_square = None
-            for san, mv in steps:
+            for mv in steps:
+                san = cur.san(mv)
                 cur.push(mv)
                 self.hist.append(cur.copy(stack=False))
                 self.events.append({'t': t, 'fen': cur.fen(), 'san': san,
@@ -330,9 +382,9 @@ def detect_orientation(path, region, duration, samples=16):
     so an intro, a thumbnail or the first second of play can't decide it. None if unclear."""
     tiles = []
     for i in range(samples):
-        img = cv2.imdecode(np.frombuffer(frame_at(path, duration * (i + 0.5) / samples), np.uint8), cv2.IMREAD_COLOR)
-        if img is not None:
-            tiles.append(board_tiles(crop256(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), region)))
+        rgb = rgb_at(path, duration * (i + 0.5) / samples)
+        if rgb is not None:
+            tiles.append(board_tiles(crop256(rgb, region)))
     if not tiles:
         return None
     probs = recognizer().predict(np.concatenate(tiles)).reshape(len(tiles), 64, 13)
@@ -365,8 +417,15 @@ def marks_to_squares(found, white_bottom):
     return out
 
 
-def process(path, on_progress=None, region=None, orientation='auto', fps=FPS, batch=8):
-    """Generator of events; also reports progress. Returns final info dict via on_progress."""
+def changed_tiles(tiles, ref):
+    """(64,) bool: tiles that differ from ref by more than video compression flicker. A piece,
+    a highlight, an arrow or a fade all count; the same square re-encoded doesn't."""
+    d = cv2.absdiff(tiles.reshape(64, -1), ref.reshape(64, -1))
+    return ((d > 24).sum(axis=1) >= 3) | (d.mean(axis=1) > 1.5)
+
+
+def process(path, on_progress=None, region=None, orientation='auto', fps=FPS):
+    """Reads the video and reports progress, new events and new marks through on_progress."""
     W, H, duration = probe(path)
     if region is None:
         region = detect_board(path, duration)
@@ -384,36 +443,35 @@ def process(path, on_progress=None, region=None, orientation='auto', fps=FPS, ba
         found = detect_orientation(path, region, duration)
         if found is not None:
             white_bottom, decided = found, True
-    pending_t, pending_tiles, pending_imgs = [], [], []
+    # Most of the board stays put from one reading to the next, so only squares that changed
+    # since they were last read go through the CNN, and the marks are only looked for again
+    # when something on the board changed. Each is compared with what it was last read from,
+    # so a slow fade still gets noticed.
+    ref = probs = None        # tiles each square was last read from, and its reading
+    mark_ref = found_marks = None
     sent = sent_marks = 0
-
-    def flush():
-        nonlocal votes, white_bottom, decided, sent, sent_marks
-        if not pending_tiles:
-            return
-        probs = rec.predict(np.concatenate(pending_tiles)).reshape(len(pending_tiles), 64, 13)
-        for t, cells, img in zip(pending_t, probs, pending_imgs):
-            if not decided:
-                votes += orientation_vote(cells)
-                if abs(votes) >= 3:
-                    white_bottom, decided = votes > 0, True
-                else:
-                    continue  # wait until we know which way up the board is
-            follower.feed(t, cells_to_squares(cells, white_bottom))
-            tracker.feed(t, marks_to_squares(marks.detect(img), white_bottom))
-        pending_t.clear(); pending_tiles.clear(); pending_imgs.clear()
-        new = follower.events[sent:]
-        sent = len(follower.events)
-        new_marks = tracker.events[sent_marks:]
-        sent_marks = len(tracker.events)
+    for t, img in frames(path, fps, crop=region, size=(256, 256)):
+        tiles = board_tiles(img)
+        if ref is None:
+            ref, probs = tiles.copy(), rec.predict(tiles)  # ref is updated in place
+        else:
+            todo = np.nonzero(changed_tiles(tiles, ref))[0]
+            if len(todo):
+                ref[todo] = tiles[todo]
+                probs[todo] = rec.predict(tiles[todo])
+        if not decided:
+            votes += orientation_vote(probs)
+            if abs(votes) >= 3:
+                white_bottom, decided = votes > 0, True
+        if decided:  # until then, wait to know which way up the board is
+            follower.feed(t, cells_to_squares(probs, white_bottom))
+            if mark_ref is None or changed_tiles(tiles, mark_ref).any():
+                mark_ref, found_marks = tiles, marks.detect(img)
+            tracker.feed(t, marks_to_squares(found_marks, white_bottom))
         if on_progress:
+            new, new_marks = follower.events[sent:], tracker.events[sent_marks:]
+            sent, sent_marks = len(follower.events), len(tracker.events)
             on_progress({'events': new, 'marks': new_marks, 'white_bottom': white_bottom,
                          'progress': min(1.0, (t + 1 / fps) / max(duration, 1e-6))})
-
-    for t, img in frames(path, fps, crop=region, size=(256, 256)):
-        pending_t.append(t); pending_tiles.append(board_tiles(img)); pending_imgs.append(img)
-        if len(pending_tiles) >= batch:
-            flush()
-    flush()
     if on_progress:
         on_progress({'progress': 1.0, 'done': True})
