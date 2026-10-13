@@ -81,7 +81,7 @@ def run(job, gen):
             job['path'] = download(job)
         if gen != job['gen']:
             return
-        cache = os.path.join(DATA, 'results', job['cache_key'] + '.json')
+        cache = os.path.join(DATA, 'results', job['cache_key'] + '.v2.json')  # v2: orientation voted over the whole video
         if job['region'] is None and job['orientation'] == 'auto' and os.path.exists(cache):
             res = json.load(open(cache))
             job.update(res, status='done', progress=1.0)
