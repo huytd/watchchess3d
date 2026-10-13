@@ -4,6 +4,7 @@ Paste a YouTube link (or upload a video) and watch it with a 3D board that follo
 Works on phones: no screen sharing. The server downloads the video, finds the board,
 reads it about 3 times a second, and sends back a timeline of positions; the page shows
 whichever position matches the current playback time, so pausing and seeking just work.
+Arrows and circles the streamer draws on the board show up on the 3D board too.
 
 ## Run it
 
@@ -29,6 +30,12 @@ home, put it behind HTTPS on a small VPS or a tunnel (Cloudflare Tunnel, Tailsca
   the CNN, smooths over time, and turns readings into positions, preferring legal moves
   (python-chess) so one shaky square can't derail the game. Each position is timestamped
   to when it first appeared.
+- `marks.py`: finds the arrows, circles and red/blue squares streamers draw (Lichess and
+  chess.com style) with plain image processing, no model. Arrows always join two square
+  centres, so it tests every possible arrow (plus chess.com's L-shaped knight arrows)
+  against a mask of strongly coloured pixels: the line must be covered, the strip beside it
+  clear, and one end wider than the other (the head). A mark must hold for two readings to
+  show and be gone for two to disappear. About 10 ms per frame.
 - `recognizer.py`: the square classifier (same weights as the browser version), in numpy.
 - `app.py`: FastAPI. Jobs run in the background; the page polls and can start playing
   while the rest of the video is still being read. Results are cached per video.
@@ -58,4 +65,7 @@ while it works.
   a cookies.txt and set `YTDLP_COOKIES`, and keep yt-dlp up to date.
 - If the board isn't found, or the wrong area is used, press **Fix board area** and draw it.
 - Only flat 2D digital boards are recognized (Lichess/chess.com style), not filmed physical boards.
+- Arrows come in four colours (green, red, blue, orange). Faint ones (a pale arrow on a board of
+  a similar colour, thin Lichess circles in a low-quality video) can be missed. Turn them off
+  under ⋯ › Show arrows from the video.
 - Downloaded videos stay in the data folder until you delete them.
