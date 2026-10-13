@@ -61,7 +61,7 @@ you open never leave your device.
   last few positions turned round, for two readings in a row, the reader turns too, and drops
   anything it took from the upside-down board. Every position records which way up it was read,
   and the 3D board turns to match as playback reaches it. Readings saved before this (no
-  `version: 3`) are read again.
+  `version: 4`) are read again.
 - `static/cnn.js`: the square classifier (`static/model.json`), run with TensorFlow.js on the
   GPU (WebGL) or with WebAssembly, whichever is faster on the device.
 - `static/index.html`: the page (3D board + YouTube's embedded player).
