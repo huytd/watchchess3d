@@ -250,13 +250,18 @@ const cellSquare = (i, whiteBottom) => {
   return whiteBottom ? (7 - row) * 8 + col : row * 8 + (7 - col);
 };
 /* How many squares read (with some confidence) the same as board b, an array indexed by
-   square a1..h8, and how many don't, reading the cells the given way up. */
+   square a1..h8, and how many don't, reading the cells the given way up. By colour only (a
+   White piece, a Black piece or nothing), which reads more reliably than which piece it is. */
 function agreement(cells, whiteBottom, b){
   let same = 0, differ = 0;
   for (let i = 0; i < 64; i++){
-    const k = argmax(cells, i * 13, 13);
-    if (cells[i * 13 + k] <= 0.5) continue;
-    if (CLASSES[k] === b[cellSquare(i, whiteBottom)]) same++; else differ++;
+    const o = i * 13;
+    let w = 0, bl = 0;
+    for (let k = 1; k <= 6; k++){ w += cells[o + k]; bl += cells[o + 6 + k]; }
+    const seen = cells[o] > 0.6 ? '.' : w > 0.6 ? 'w' : bl > 0.6 ? 'b' : null;
+    if (!seen) continue;
+    const p = b[cellSquare(i, whiteBottom)];
+    if (seen === (p === '.' ? '.' : p === p.toUpperCase() ? 'w' : 'b')) same++; else differ++;
   }
   return { same, differ };
 }
@@ -883,9 +888,10 @@ export class Reader {
      (and not as it is: lots moved at once). Its index in the follower's history, or -1. */
   flipped(){
     const hist = this.follower.hist;
-    for (let i = hist.length - 1; i >= Math.max(0, hist.length - 6); i--){
+    for (let i = hist.length - 1; i >= Math.max(0, hist.length - 12); i--){
       const turned = agreement(this.probs, !this.whiteBottom, hist[i].b);
-      if (turned.same >= 48 && turned.differ <= 2 && agreement(this.probs, this.whiteBottom, hist[i].b).differ >= 6) return i;
+      if (turned.same < 48 || turned.differ > 3) continue;
+      if (agreement(this.probs, this.whiteBottom, hist[i].b).differ >= 6 + 2 * turned.differ) return i;
     }
     return -1;
   }
@@ -898,7 +904,7 @@ export class Reader {
     this.whiteBottom = whiteBottom; this.decided = true;
     // the screen shows the position already taken, now the other way up: say it again, so the
     // view turns with the video now, not at the next move
-    if (agreement(this.probs, whiteBottom, f.board.b).differ <= 2){
+    if (agreement(this.probs, whiteBottom, f.board.b).differ <= 3){
       const last = f.events[f.events.length - 1], fen = f.board.fen();
       // keeping the last move's squares lit if it is the position that move made
       const lit = last && last.fen === fen ? { from: last.from, to: last.to } : { from: null, to: null };

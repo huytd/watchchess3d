@@ -252,7 +252,16 @@ def series():
             for s in load_series()]
 
 
-app.mount('/', StaticFiles(directory=os.path.join(os.path.dirname(__file__), 'static'), html=True), name='static')
+class Static(StaticFiles):
+    # the browser checks back each time (a quick 304 when nothing changed), so an update to the
+    # page or the reader (engine.js, in a worker) is picked up at once, not days later
+    async def get_response(self, path, scope):
+        res = await super().get_response(path, scope)
+        res.headers['Cache-Control'] = 'no-cache'
+        return res
+
+
+app.mount('/', Static(directory=os.path.join(os.path.dirname(__file__), 'static'), html=True), name='static')
 
 
 if __name__ == '__main__' and sys.argv[1:] == ['series']:
