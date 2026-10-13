@@ -52,6 +52,9 @@ you open never leave your device.
 - `static/cnn.js`: the square classifier (`static/model.json`), run with TensorFlow.js on the
   GPU (WebGL) or with WebAssembly, whichever is faster on the device.
 - `static/index.html`: the page (3D board + YouTube's embedded player).
+- `static/pieces.glb`: the chess pieces, from Poly Haven's [Chess Set](https://polyhaven.com/a/chess_set)
+  by Riley Queen (CC0), cut down to one mesh per piece type and 512px textures (690 KB) by
+  `tools/make_pieces.py`. Simple built-in pieces show until it has loaded.
 
 Speed depends on the device. Without a GPU (WebAssembly on 4 CPU cores) a 71-second test video
 took about 15 seconds, so roughly 2.5 minutes for 20 minutes of video; you can watch from the
@@ -71,7 +74,7 @@ start while it works. The server itself stays under 100 MB of memory and uses al
 - **YouTube's terms of service don't allow downloading videos** outside YouTube's own apps.
   Running this for yourself is a personal-use gray area; don't run it as a public service.
   Opening your own recordings avoids the issue.
-- The page loads TensorFlow.js from a CDN (jsDelivr) the first time, so the browser needs to reach it.
+- The page loads TensorFlow.js and three.js from CDNs (jsDelivr, cdnjs) the first time, so the browser needs to reach them.
 - A video is downloaded to the server and then once more by each browser that reads it (480p,
   video only: a few MB per minute).
 - **YouTube often blocks downloads from cloud servers** ("Sign in to confirm you're not a bot").

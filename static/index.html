@@ -173,6 +173,7 @@ img,video,canvas{max-width:none}
 </aside>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script type="module">
 import { readVideo, warmUp, openVideo, closeVideo, seek } from './read.js';
 const $ = s => document.querySelector(s);
@@ -408,16 +409,37 @@ const MAT = {
   w: new THREE.MeshStandardMaterial({ color: 0xf1e8d4, roughness: 0.42, metalness: 0.02 }),
   b: new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 0.3, metalness: 0.1 }),
 };
-function makePiece(ch){
-  const color = ch === ch.toUpperCase() ? 'w' : 'b';
-  const g = new THREE.Group();
-  for (const geo of GEO[ch.toLowerCase()]){
-    const m = new THREE.Mesh(geo, MAT[color]);
-    m.castShadow = true; m.receiveShadow = true;
+/* the real pieces: Poly Haven's "Chess Set" by Riley Queen (CC0), packed by tools/make_pieces.py.
+   Until it has loaded (or if it can't), the turned pieces above stand in, and loading swaps them. */
+const MODEL = {}, MODEL_SCALE = 16;
+if (THREE.GLTFLoader) new THREE.GLTFLoader().load('pieces.glb', gltf => {
+  for (const o of gltf.scene.children) MODEL[o.name] = o;
+  for (const g of view.meshes) if (g) fillPiece(g, g.userData.ch);
+  dirty = true;
+}, undefined, err => console.warn('pieces.glb', err));
+function fillPiece(g, ch){
+  const color = ch === ch.toUpperCase() ? 'w' : 'b', knight = ch.toLowerCase() === 'n';
+  g.clear();
+  if (MODEL[ch]){
+    /* the model's white pieces face +z, ours face -z; knights of both colours turn side-on to show their profile */
+    const m = MODEL[ch].clone();
+    m.scale.setScalar(MODEL_SCALE);
+    m.rotation.y = knight ? -Math.PI / 2 : color === 'w' ? Math.PI : 0;
+    m.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
     g.add(m);
+  } else {
+    for (const geo of GEO[ch.toLowerCase()]){
+      const m = new THREE.Mesh(geo, MAT[color]);
+      m.castShadow = true; m.receiveShadow = true;
+      if (knight) m.rotation.y = color === 'w' ? Math.PI / 6 : Math.PI + Math.PI / 6;
+      g.add(m);
+    }
   }
-  if (ch.toLowerCase() === 'n') g.rotation.y = color === 'w' ? Math.PI / 6 : Math.PI + Math.PI / 6;
   g.userData.ch = ch;
+}
+function makePiece(ch){
+  const g = new THREE.Group();
+  fillPiece(g, ch);
   return g;
 }
 
