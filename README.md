@@ -10,16 +10,16 @@ whichever position matches the current playback time, so pausing and seeking jus
 With Docker:
 
     docker build -t shadowboard .
-    docker run -p 8000:8000 -v shadowboard-data:/data shadowboard
+    docker run -p 8080:8080 -v shadowboard-data:/data shadowboard
 
-Then open http://localhost:8000 (or your server's address) on any device.
+Then open http://localhost:8080 (or your server's address) on any device.
 
 Without Docker (needs Python 3.10+ and ffmpeg):
 
     pip install -r requirements.txt
-    uvicorn app:app --host 0.0.0.0 --port 8000
+    uvicorn app:app --host 0.0.0.0 --port 8080
 
-For phones on the same Wi-Fi, open http://<your computer's IP>:8000. To use it away from
+For phones on the same Wi-Fi, open http://<your computer's IP>:8080. To use it away from
 home, put it behind HTTPS on a small VPS or a tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok).
 
 ## How it works
