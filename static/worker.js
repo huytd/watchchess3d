@@ -1,7 +1,7 @@
 /* Runs the reading off the page's thread. Given an MP4 it does everything here, decoding the
-   video with WebCodecs; otherwise the page steps a <video> through the video and posts each
-   frame's pixels here. Either way this finds the board, classifies squares and follows the
-   game. */
+   video with WebCodecs; otherwise the page steps a <video> through the video (or grabs a
+   shared tab as it plays) and posts each frame's pixels here. Either way this finds the board,
+   classifies squares and follows the game. */
 import * as tf from 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/+esm';
 import 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-cpu@4.22.0/+esm';
 import 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/+esm';
@@ -95,6 +95,11 @@ const local = {
   async orient(crops){ await init(); return E.detectOrientation(predict, crops.map(toBoard)); },
   async start(whiteBottom, decided, fixed){ await init(); reader = new E.Reader(predict, { whiteBottom, decided, fixed }); },
   frame(t, img){ return reader.frame(t, toBoard(img)); },
+  /* a frame of a shared tab: read only if the board still shows (its gap is at least minGap) */
+  async live(t, img, minGap){
+    const b = toBoard(img), gap = E.boardGap(b);
+    return gap < minGap ? { gap } : { gap, ...await reader.frame(t, b) };
+  },
 };
 
 const cancelled = new Set();
@@ -105,6 +110,7 @@ const ops = {
   orient: ({ crops }) => local.orient(crops),
   start: ({ whiteBottom, decided, fixed }) => local.start(whiteBottom, decided, fixed),
   frame: ({ t, img }) => local.frame(t, img),
+  live: ({ t, img, minGap }) => local.live(t, img, minGap),
   /* read a whole MP4 here; {fallback: true} if it can't be, and the page uses a <video> */
   async read({ src, region, orientation }, id){
     const live = () => { if (cancelled.has(id)) throw new Error('cancelled'); };

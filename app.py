@@ -1,6 +1,8 @@
 """Watch Chess in 3D server. It only fetches YouTube videos; reading the board happens in the
 browser (static/engine.js), so the server needs next to no CPU.
 
+GET  /                                                -> the page that reads a tab the viewer shares (needs no server)
+GET  /server                                          -> the page that reads videos this server fetches
 POST /api/videos           {"url": "<youtube link>"}  -> {"video_id", status...}; starts the download
 GET  /api/videos/{id}                                 -> status (downloading|ready|error), progress, error
 GET  /api/videos/{id}/file                            -> the video (with range requests, so the browser can seek)
@@ -16,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -261,7 +263,21 @@ class Static(StaticFiles):
         return res
 
 
-app.mount('/', Static(directory=os.path.join(os.path.dirname(__file__), 'static'), html=True), name='static')
+STATIC = os.path.join(os.path.dirname(__file__), 'static')
+
+
+@app.get('/server')
+def server_page():
+    # at /server (no slash), the page's relative links reach the files at the root
+    return FileResponse(os.path.join(STATIC, 'server.html'), headers={'Cache-Control': 'no-cache'})
+
+
+@app.get('/server/')
+def server_slash():
+    return RedirectResponse('/server')
+
+
+app.mount('/', Static(directory=STATIC, html=True), name='static')
 
 
 if __name__ == '__main__' and sys.argv[1:] == ['series']:

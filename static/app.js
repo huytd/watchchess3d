@@ -1,0 +1,1604 @@
+/* The page: a 3D board that follows a chess video. Two pages share it: index.html, where the
+   viewer shares the tab playing the video (or opens a file) and this device reads it as it plays,
+   and server.html, where the server fetches YouTube videos for reading. */
+import { readVideo, readScreen, warmUp, openVideo, closeVideo, seek } from './read.js';
+const $ = s => document.querySelector(s);
+const LIVE = document.body.dataset.mode === 'live';
+const FILES = 'abcdefgh';
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+/* ---------- board helpers ---------- */
+function fenToBoard(fen){
+  const b = new Array(64).fill('.');
+  const rows = fen.split(' ')[0].split('/');
+  for (let r = 0; r < 8; r++){
+    let f = 0;
+    for (const ch of rows[r]){
+      if (ch >= '1' && ch <= '8') f += +ch;
+      else { b[(7 - r) * 8 + f] = ch; f++; }
+    }
+  }
+  return b;
+}
+function boardToPlacement(b){
+  let s = '';
+  for (let r = 7; r >= 0; r--){
+    let e = 0;
+    for (let f = 0; f < 8; f++){
+      const c = b[r * 8 + f];
+      if (c === '.' || c === '?') e++;
+      else { if (e){ s += e; e = 0; } s += c; }
+    }
+    if (e) s += e;
+    if (r) s += '/';
+  }
+  return s;
+}
+/* ---------- 3D board ---------- */
+const sceneEl = $('#scene');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputEncoding = THREE.sRGBEncoding;
+sceneEl.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
+// az, pol and zoom ease towards their targets; sway is the auto-rotate swing added to az
+const orbit = { az: 0, pol: 0.74, base: 13, zoom: 1, azTarget: 0, polTarget: 0.74, zoomTarget: 1, sway: 0 };
+
+scene.add(new THREE.HemisphereLight(0xf4f1e6, 0x2a3530, 0.42));
+const key = new THREE.DirectionalLight(0xfff4e0, 0.8);
+key.position.set(-5, 11, 6);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+// wide enough for the things on the table around the board too
+Object.assign(key.shadow.camera, { left: -11.5, right: 11.5, top: 11.5, bottom: -11.5, near: 1, far: 34 });
+key.shadow.bias = -0.0005;
+key.shadow.radius = 3;
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xd8e6ff, 0.28);
+fill.position.set(6, 5, -6);
+scene.add(fill);
+
+function canvasTex(size, draw){
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  draw(c.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(c);
+  t.encoding = THREE.sRGBEncoding;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+}
+/* the board's colours can be changed (Settings › Board colours), so its textures are redrawn on demand;
+   the frame is a deep shade of the dark squares. Wood lays a neutral grain (static/wood.jpg, from
+   Poly Haven's Cherry Veneer, CC0) over each colour with soft-light, so any tone becomes that wood. */
+const boardColours = { light: '#d9cdae', dark: '#56744f', wood: false };
+const frameColour = () => '#' + new THREE.Color(boardColours.dark).lerp(new THREE.Color(0x0c0f0d), 0.72).getHexString();
+const woodImg = new Image();
+let woodPattern = null;
+function woodReady(){
+  if (woodPattern) return true;
+  if (!woodImg.src){ woodImg.onload = () => paintBoard(boardColours.light, boardColours.dark, boardColours.wood); woodImg.src = 'wood.jpg'; }
+  if (!woodImg.complete || !woodImg.naturalWidth) return false;
+  woodPattern = document.createElement('canvas').getContext('2d').createPattern(woodImg, 'repeat');
+  return true;
+}
+/* grain over a rectangle, turned by rot and shifted by (ox, oy) so neighbouring pieces of wood differ */
+function grain(g, x, y, w, h, rot, ox, oy){
+  const k = 0.7, r = Math.hypot(w, h) / k;
+  g.save();
+  g.beginPath(); g.rect(x, y, w, h); g.clip();
+  g.translate(x + w / 2, y + h / 2); g.rotate(rot); g.scale(k, k); g.translate(ox, oy);
+  g.globalCompositeOperation = 'soft-light';
+  g.fillStyle = woodPattern; g.fillRect(-ox - r, -oy - r, 2 * r, 2 * r);
+  g.restore();
+}
+function drawBoard(g, n){
+  const q = n / 8, wood = boardColours.wood && woodReady();
+  let seed = 11;
+  const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647 * 512;
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++){
+    g.fillStyle = (r + f) % 2 === 0 ? boardColours.light : boardColours.dark;
+    g.fillRect(f * q, r * q, q, q);
+    if (wood) grain(g, f * q, r * q, q, q, 0, rnd(), rnd());
+  }
+  if (wood) return;
+  // faint vinyl grain
+  const img = g.getImageData(0, 0, n, n), d = img.data;
+  for (let i = 0; i < d.length; i += 4){ const k = (Math.random() - 0.5) * 7; d[i] += k; d[i + 1] += k; d[i + 2] += k; }
+  g.putImageData(img, 0, 0);
+}
+function drawFrame(g, n){
+  g.fillStyle = frameColour(); g.fillRect(0, 0, n, n);
+  const u = n / 9.2, off = 0.6 * u;
+  if (boardColours.wood && woodReady()){
+    // grain runs along each side of the frame
+    grain(g, 0, 0, n, off, 0, 40, 0); grain(g, 0, n - off, n, off, 0, 300, 0);
+    grain(g, 0, off, off, n - 2 * off, Math.PI / 2, 150, 0); grain(g, n - off, off, off, n - 2 * off, Math.PI / 2, 420, 0);
+  }
+  g.fillStyle = '#cfa95f';
+  g.font = `600 ${u * 0.3}px "Instrument Sans", system-ui, sans-serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (let i = 0; i < 8; i++){
+    const x = off + (i + 0.5) * u;
+    g.fillText(FILES[i], x, n - off / 2);
+    g.save(); g.translate(x, off / 2); g.rotate(Math.PI); g.fillText(FILES[i], 0, 0); g.restore();
+    const y = off + (7 - i + 0.5) * u;
+    g.fillText(String(i + 1), off / 2, y);
+    g.save(); g.translate(n - off / 2, y); g.rotate(Math.PI); g.fillText(String(i + 1), 0, 0); g.restore();
+  }
+}
+const boardTex = canvasTex(1024, drawBoard), frameTex = canvasTex(1152, drawFrame);
+const frameSide = new THREE.MeshStandardMaterial({ roughness: 0.6 });
+function paintBoard(light, dark, wood){
+  Object.assign(boardColours, { light, dark, wood });
+  for (const [tex, draw] of [[boardTex, drawBoard], [frameTex, drawFrame]]){
+    draw(tex.image.getContext('2d'), tex.image.width);
+    tex.needsUpdate = true;
+  }
+  frameSide.color.set(frameColour()).convertSRGBToLinear();
+  dirty = true;
+}
+frameSide.color.set(frameColour()).convertSRGBToLinear();
+const frame = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.42, 9.2), [
+  frameSide, frameSide, new THREE.MeshStandardMaterial({ map: frameTex, roughness: 0.55 }), frameSide, frameSide, frameSide,
+]);
+frame.position.y = -0.21; frame.receiveShadow = true; scene.add(frame);
+const top = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshStandardMaterial({ map: boardTex, roughness: 0.72 }));
+top.rotation.x = -Math.PI / 2; top.position.y = 0.002; top.receiveShadow = true; scene.add(top);
+
+/* the table the board stands on (Settings › Table), fading into a dim room with fog. Textures are from
+   Poly Haven (CC0): Wood Table 001, Wood Table, Brown Leather, Velour Velvet and Rough Linen, the
+   last two made grey so they can be tinted. size is how many squares one copy of a texture covers. */
+const TABLES = {
+  walnut: { name: 'Walnut', file: 'walnut.jpg', size: 14, room: '#1c130e' },
+  oak: { name: 'Oak planks', file: 'oak.jpg', size: 18, room: '#2b1f17' },
+  leather: { name: 'Leather', file: 'leather.jpg', size: 9, room: '#21150c' },
+  baize: { name: 'Green baize', file: 'cloth.jpg', tint: '#2f6a48', size: 5, room: '#122219' },
+  linen: { name: 'Linen', file: 'linen.jpg', tint: '#e9e3d6', size: 5, room: '#bdb7aa' },
+  plain: { name: 'None' },
+};
+const tableMat = new THREE.MeshStandardMaterial({ roughness: 0.85 });
+const table = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), tableMat);
+table.rotation.x = -Math.PI / 2; table.position.y = -0.425; table.receiveShadow = true; scene.add(table);
+scene.fog = new THREE.Fog(0x000000, 1e4, 1e4);
+const tableTex = {};
+function setTable(key){
+  const t = TABLES[key];
+  table.visible = !!t.file;
+  sceneEl.classList.toggle('table', table.visible);
+  if (t.file){
+    if (!tableTex[key]){
+      const tex = tableTex[key] = new THREE.TextureLoader().load('table/' + t.file, () => { dirty = true; });
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.setScalar(160 / t.size);
+      tex.encoding = THREE.sRGBEncoding;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    }
+    tableMat.map = tableTex[key]; tableMat.needsUpdate = true;
+    tableMat.color.set(t.tint || '#ffffff').convertSRGBToLinear();
+    // the clear colour is written as is, while fog is mixed in linear light before the sRGB encode
+    renderer.setClearColor(t.room, 1);
+    scene.fog.color.set(t.room).convertSRGBToLinear();
+  } else renderer.setClearColor(0x000000, 0);
+  // the phone's browser bar matches the room
+  themeMeta.content = t.room || themeMeta.dataset.plain;
+  props.visible = table.visible;
+  placeCamera();
+  dirty = true;
+}
+
+/* things lying on the table, laid out afresh on every visit: each player has a scoresheet that
+   fills in with the game's moves, a pen and a cup of coffee by their right hand, a chess clock
+   stands at one side of the board, and a few odds and ends are scattered around. The models are
+   from Poly Haven (CC0), packed into static/props.glb by tools/make_props.py; the clock and the
+   scoresheets are drawn here. White sits at +z, Black at -z, one unit is a square. */
+const props = new THREE.Group(); scene.add(props);
+const TABLE_Y = -0.425, PROP_SCALE = 16;  // the props are in metres, like the pieces
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = list => list[Math.floor(Math.random() * list.length)];
+const placed = [];  // footprints: {x, z, r}
+function fits(x, z, r){
+  if (Math.abs(x) < 4.9 + r * 0.7 && Math.abs(z) < 4.9 + r * 0.7) return false;  // clear of the board
+  return placed.every(p => Math.hypot(p.x - x, p.z - z) > p.r + r + 0.15);
+}
+function putDown(obj, x, z, rot, r, y = 0){
+  obj.position.set(x, TABLE_Y + y, z); obj.rotation.y = rot;
+  obj.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+  props.add(obj);
+  if (r) placed.push({ x, z, r });
+  return obj;
+}
+/* turn a point given for White's side round to Black's, or not */
+const side = (c, x, z) => c === 'w' ? [x, z] : [-x, -z];
+
+/* scoresheets: a printed form with the moves of the game being shown written in by hand */
+const SHEET_W = 2.4, SHEET_H = 3.4, SHEET_ROWS = 25;
+const sheets = [];
+const sheetInfo = { round: 1 + Math.floor(Math.random() * 9), board: 1 + Math.floor(Math.random() * 40), ink: pick(['#1f3c88', '#1b2a4a', '#2a2a2e']) };
+function drawSheet(g, w, h, rows, firstRow){
+  g.fillStyle = '#f7f4ec'; g.fillRect(0, 0, w, h);
+  const print = '#30465c', grid = '#b8c4cf', hand = `500 ${w * 0.05}px Caveat, "Segoe Print", cursive`;
+  g.fillStyle = print; g.textBaseline = 'middle'; g.textAlign = 'center';
+  g.font = `600 ${w * 0.042}px "Instrument Sans", system-ui, sans-serif`;
+  g.fillText('SCORESHEET', w / 2, h * 0.045);
+  g.font = `500 ${w * 0.026}px "Instrument Sans", system-ui, sans-serif`;
+  g.textAlign = 'left';
+  const m = w * 0.06, top = h * 0.13, bottom = h - m * 0.8, colW = (w - 2 * m) / 2, rowH = (bottom - top) / (SHEET_ROWS + 1);
+  const fieldY = h * 0.09;
+  for (const [label, x, x2, val] of [['Round', m, w * 0.36, sheetInfo.round], ['Board', w * 0.4, w * 0.66, sheetInfo.board], ['Date', w * 0.7, w - m, new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'numeric' })]]){
+    g.fillStyle = print; g.fillText(label, x, fieldY);
+    const lx = x + g.measureText(label).width + 6;
+    g.strokeStyle = grid; g.lineWidth = 1.5; g.beginPath(); g.moveTo(lx, fieldY + w * 0.018); g.lineTo(x2, fieldY + w * 0.018); g.stroke();
+    g.font = hand; g.fillStyle = sheetInfo.ink; g.fillText(String(val), lx + 6, fieldY - 2);
+    g.font = `500 ${w * 0.026}px "Instrument Sans", system-ui, sans-serif`;
+  }
+  for (let c = 0; c < 2; c++){
+    const x0 = m + c * colW, numW = colW * 0.18, mvW = (colW - numW) / 2;
+    g.fillStyle = print; g.textAlign = 'center';
+    g.fillText('White', x0 + numW + mvW / 2, top + rowH / 2); g.fillText('Black', x0 + numW + mvW * 1.5, top + rowH / 2);
+    g.strokeStyle = grid; g.lineWidth = 1.2;
+    g.strokeRect(x0, top, colW, bottom - top);
+    g.beginPath();
+    for (let r = 1; r <= SHEET_ROWS; r++){ g.moveTo(x0, top + r * rowH); g.lineTo(x0 + colW, top + r * rowH); }
+    g.moveTo(x0 + numW, top); g.lineTo(x0 + numW, bottom); g.moveTo(x0 + numW + mvW, top); g.lineTo(x0 + numW + mvW, bottom);
+    g.stroke();
+    for (let r = 0; r < SHEET_ROWS; r++){
+      const n = firstRow + c * SHEET_ROWS + r, y = top + (r + 1.5) * rowH, row = rows[n - rows.first];
+      g.font = `500 ${w * 0.026}px "Instrument Sans", system-ui, sans-serif`; g.fillStyle = print;
+      g.fillText(String(n), x0 + numW / 2, y);
+      if (!row) continue;
+      g.font = hand; g.fillStyle = sheetInfo.ink;
+      if (row.w) g.fillText(row.w, x0 + numW + mvW / 2, y - 1);
+      if (row.b) g.fillText(row.b, x0 + numW + mvW * 1.5, y - 1);
+    }
+  }
+}
+let sheetKey = null;
+/* moves: [{n, w, b}] numbered from the game's first move */
+function writeSheets(rows){
+  const key = JSON.stringify(rows);
+  if (key === sheetKey) return;
+  sheetKey = key;
+  rows.first = rows.length ? rows[0].n : 1;
+  const last = rows.length ? rows[rows.length - 1].n : 1;
+  // a full sheet goes under a fresh one
+  const firstRow = 1 + Math.floor((last - 1) / (2 * SHEET_ROWS)) * 2 * SHEET_ROWS;
+  for (const s of sheets){
+    drawSheet(s.image.getContext('2d'), s.image.width, s.image.height, rows, firstRow);
+    s.needsUpdate = true;
+  }
+  dirty = true;
+}
+function makeSheet(){
+  const tex = canvasTex(1024, () => {});
+  tex.image.width = 724; tex.image.height = 1024;
+  sheets.push(tex);
+  const paper = new THREE.MeshStandardMaterial({ color: 0xf2efe6, roughness: 0.9 });
+  const sheet = new THREE.Mesh(new THREE.BoxGeometry(SHEET_W, 0.02, SHEET_H),
+    [paper, paper, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.88 }), paper, paper, paper]);
+  sheet.position.y = 0.01;
+  const g = new THREE.Group(); g.add(sheet);
+  return g;
+}
+
+/* a digital chess clock: a wedge with the two times on its sloping face and a rocker on top,
+   down on the side of whoever just moved. The times run down for the side to move while the
+   video plays. */
+const CONTROLS = [[180, 2], [300, 0], [300, 3], [600, 0], [600, 5], [900, 10]];
+const clock = { mesh: null, tex: null, rockers: [], time: { w: 0, b: 0 }, inc: 0, lastT: null, shown: '', leftColour: 'w', side: 1 };
+{
+  const [base, inc] = pick(CONTROLS);
+  clock.inc = inc;
+  // a game already under way
+  clock.time.w = Math.round(base * rand(0.35, 0.95)); clock.time.b = Math.round(base * rand(0.35, 0.95));
+}
+const clockFmt = s => { s = Math.max(0, Math.ceil(s)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+function drawClock(){
+  if (!clock.tex) return;
+  const left = clock.leftColour, right = left === 'w' ? 'b' : 'w';
+  const txt = clockFmt(clock.time[left]) + '|' + clockFmt(clock.time[right]);
+  if (txt === clock.shown) return;
+  clock.shown = txt;
+  const c = clock.tex.image, g = c.getContext('2d'), w = c.width, h = c.height;
+  g.fillStyle = '#121416'; g.fillRect(0, 0, w, h);
+  const pad = h * 0.14;
+  g.fillStyle = '#9fae95'; g.fillRect(pad, pad, w - 2 * pad, h - 2 * pad);
+  g.fillStyle = 'rgba(0,0,0,0.06)'; g.fillRect(pad, h - pad - h * 0.12, w - 2 * pad, h * 0.12);
+  g.fillStyle = '#1d241b'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = `600 ${h * 0.42}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
+  const [a, b] = txt.split('|');
+  g.fillText(a, w * 0.27, h * 0.53); g.fillText(b, w * 0.73, h * 0.53);
+  g.fillRect(w / 2 - 1.5, pad + h * 0.12, 3, h - 2 * pad - h * 0.24);
+  // the dot by the side to move
+  const turn = (S.fen || START_FEN).split(' ')[1];
+  g.beginPath(); g.arc(turn === left ? w * 0.09 : w * 0.91, h * 0.3, h * 0.04, 0, Math.PI * 2); g.fill();
+  clock.tex.needsUpdate = true;
+  dirty = true;
+}
+function makeClock(){
+  const L = 3.0, D = 1.45, HB = 0.9, HF = 0.3, TOP = 0.5 * D;  // length, depth, back and front heights
+  const shape = new THREE.Shape([[0, 0], [D, 0], [D, HB], [D - TOP, HB], [0, HF]].map(([u, v]) => V2(u, v)));
+  const body = new THREE.ExtrudeGeometry(shape, { depth: L, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.04, bevelSegments: 2, curveSegments: 1 });
+  body.translate(0, 0, -L / 2);
+  body.rotateY(Math.PI / 2);  // its length now runs along x, and its depth along -z
+  body.computeVertexNormals();
+  const dark = pick([0x1b1d20, 0x24262a, 0x3a2418]);
+  const plastic = new THREE.MeshStandardMaterial({ color: new THREE.Color(dark).convertSRGBToLinear(), roughness: 0.45, metalness: 0.05 });
+  const g = new THREE.Group();
+  const m = new THREE.Mesh(body, plastic); m.position.y = 0.04; g.add(m);
+  // after rotateY(π/2), u (depth) runs along -z: the front (u = 0) is at z = 0 and the back at z = -D
+  clock.tex = canvasTex(512, () => {}); clock.tex.image.width = 512; clock.tex.image.height = 160;
+  const fx = D - TOP, slope = Math.hypot(fx, HB - HF), tilt = Math.atan2(HB - HF, fx);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(L * 0.86, slope * 0.78), new THREE.MeshStandardMaterial({ map: clock.tex, roughness: 0.3, metalness: 0 }));
+  // the face's middle, a hair out from the sloping surface
+  face.position.set(0, 0.04 + (HF + HB) / 2 + 0.045 * Math.cos(tilt), -fx / 2 + 0.045 * Math.sin(tilt));
+  face.rotation.x = -(Math.PI / 2 - tilt);
+  g.add(face);
+  for (const s of [-1, 1]){
+    const rocker = new THREE.Mesh(new THREE.BoxGeometry(L * 0.36, 0.1, TOP * 0.62), plastic);
+    rocker.position.set(s * L * 0.22, 0.04 + HB + 0.05, -(D - TOP / 2));
+    rocker.userData.s = s;
+    g.add(rocker); clock.rockers.push(rocker);
+  }
+  // shift so the group's origin is the middle of its footprint; the face looks towards +z
+  for (const o of g.children) o.position.z += D / 2;
+  return g;
+}
+/* the rocker on the side that just moved is down */
+function setRockers(){
+  const turn = (S.fen || START_FEN).split(' ')[1];
+  for (const r of clock.rockers){
+    const colour = r.userData.s < 0 ? clock.leftColour : clock.leftColour === 'w' ? 'b' : 'w';
+    const down = colour !== turn;
+    r.position.y = 0.04 + 0.9 + (down ? 0.0 : 0.09);
+    r.rotation.z = (down ? 0 : 0.09) * -r.userData.s;
+  }
+}
+
+function layOutTable(models){
+  props.clear(); placed.length = 0; sheets.length = 0; clock.rockers.length = 0; sheetKey = null;
+  const get = name => { const o = models.getObjectByName(name); return o ? o.clone() : null; };
+  const footprint = obj => { const b = new THREE.Box3().setFromObject(obj), s = b.getSize(new THREE.Vector3()); return Math.hypot(s.x, s.z) / 2; };
+  const scaled = name => { const o = get(name); if (o) o.scale.setScalar(PROP_SCALE); return o; };
+  // the clock, at one side of the board, its face turned outwards and a little towards White,
+  // and along from the scoresheet on that side
+  clock.side = Math.random() < 0.6 ? -1 : 1;  // more often on the a-file side, which is the emptier side on wide screens
+  const ck = makeClock();
+  const yaw = rand(0.25, 0.55);
+  putDown(ck, clock.side * rand(6.4, 6.9), -clock.side * rand(0.5, 1.1), clock.side < 0 ? yaw - Math.PI / 2 : Math.PI / 2 - yaw, 1.8);
+  // which colour's button is on the clock's left (its local -x)
+  ck.updateMatrixWorld(true);
+  const lp = new THREE.Vector3(-1, 0, 0).applyMatrix4(ck.matrixWorld);
+  clock.leftColour = lp.z > ck.position.z ? 'w' : 'b';
+  clock.shown = ''; drawClock(); setRockers();
+  // each player's things, by their right hand (White's right is +x)
+  for (const c of ['w', 'b']){
+    const turn = c === 'w' ? 0 : Math.PI;
+    const sheet = makeSheet();
+    const [sx, sz] = side(c, rand(6.1, 6.6), rand(3.6, 4.2));
+    putDown(sheet, sx, sz, turn + rand(-0.25, 0.1), 2.0);
+    const penName = pick(['pen_blue', 'pen_blue', 'pen_fancy', 'pen_red', 'pencil']);
+    const pen = scaled(penName);
+    if (pen){
+      const a = turn + rand(-1.1, -0.5);
+      const [ox, oz] = side(c, rand(-0.3, 0.5), rand(-0.6, 0.6));
+      putDown(pen, sx + ox, sz + oz, a, 0, 0.02);
+    }
+    const [kx, kz] = side(c, rand(8.3, 9.2), rand(4.6, 6.4));
+    const saucer = scaled('saucer'), cup = scaled('cup');
+    if (saucer && cup){
+      const g = new THREE.Group();
+      g.add(saucer); cup.position.y = 0.006 * PROP_SCALE; g.add(cup);
+      // coffee, glossy and dark, a little below the rim
+      const coffee = new THREE.Mesh(new THREE.CircleGeometry(0.0435 * PROP_SCALE, 40),
+        new THREE.MeshStandardMaterial({ color: new THREE.Color(pick([0x2b170c, 0x3a2112, 0x6b4428])).convertSRGBToLinear(), roughness: 0.12 }));
+      // the cup's bowl is off its middle, which counts the handle
+      cup.rotation.y = rand(-0.6, 0.6);
+      coffee.rotation.x = -Math.PI / 2;
+      coffee.position.set(0, (0.006 + 0.05) * PROP_SCALE, 0.013 * PROP_SCALE).applyAxisAngle(new THREE.Vector3(0, 1, 0), cup.rotation.y);
+      g.add(coffee);
+      putDown(g, kx, kz, turn + rand(-0.4, 0.4) + Math.PI / 2, 1.3);
+    }
+  }
+  // odds and ends, a few of these each time; tall ones (far) stay well away from the board
+  const EXTRAS = [
+    { name: 'plant', far: true, scale: 0.75 }, { name: 'teapot', far: true, scale: 0.7 }, { name: 'spectacles' }, { name: 'wrist_watch' },
+    { name: 'pocket_watch' }, { name: 'croissant', on: 'plate', scale: 0.85 }, { name: 'apple' }, { name: 'magnifier', scale: 0.8 },
+    { name: 'pencil_cup' }, { name: 'eraser' }, { name: 'pencil_used' },
+  ];
+  const chosen = EXTRAS.sort(() => Math.random() - 0.5).slice(0, 4 + Math.floor(Math.random() * 3));
+  // every other one goes to the left of the board as White sees it (the top left of a wide screen),
+  // the rest to the mirror of that, by White's right hand
+  chosen.forEach((ex, i) => {
+    let obj = scaled(ex.name);
+    if (!obj) return;
+    if (ex.on){
+      const under = scaled(ex.on);
+      if (under){ const g = new THREE.Group(); g.add(under); obj.position.y = 0.015 * PROP_SCALE; obj.rotation.y = rand(0, Math.PI * 2); g.add(obj); obj = g; }
+    }
+    if (ex.scale) obj.scale.multiplyScalar(ex.scale);
+    const r = footprint(obj) * 0.9;
+    for (let tries = 0; tries < 80; tries++){
+      let x = rand(5.2, 10.6), z = rand(-6.4, 3.2);
+      if (tries > 40 && Math.random() < 0.5){ x = rand(-5.5, 5.5); z = -rand(5.6, 8.4); }  // or, if crowded, beyond an end
+      if (i % 2) [x, z] = [-x, -z];
+      x = -x;  // so even ones start on the a-file side
+      if (ex.far && (Math.hypot(x, z) < 8 || z > -1)) continue;  // and away from White's side, where the camera usually is
+      if (Math.hypot(x, z) > 11.2 || !fits(x, z, r)) continue;
+      putDown(obj, x, z, rand(0, Math.PI * 2), r);
+      break;
+    }
+  });
+  dirty = true;
+}
+/* loaded after the pieces, which matter more */
+function loadProps(){
+  new THREE.GLTFLoader().load('props.glb', gltf => {
+    layOutTable(gltf.scene);
+    updateSheets();
+  }, undefined, err => console.warn('props.glb', err));
+}
+
+/* last-move squares: a bright yellow wash with a solid rim, so the rim still shows around a piece's base;
+   the destination square is a little stronger than the origin */
+const hlTex = (fill, rim) => canvasTex(128, (g, n) => {
+  g.fillStyle = fill; g.fillRect(0, 0, n, n);
+  const w = n * 0.07;
+  g.strokeStyle = rim; g.lineWidth = w; g.strokeRect(w / 2, w / 2, n - w, n - w);
+});
+const hlMats = [
+  new THREE.MeshBasicMaterial({ map: hlTex('rgba(255, 214, 51, 0.55)', 'rgba(255, 196, 0, 0.95)'), transparent: true, depthWrite: false }),
+  new THREE.MeshBasicMaterial({ map: hlTex('rgba(255, 214, 51, 0.72)', 'rgba(255, 186, 0, 1)'), transparent: true, depthWrite: false }),
+];
+const hl = hlMats.map(mat => { const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat); m.rotation.x = -Math.PI / 2; m.position.y = 0.006; m.visible = false; scene.add(m); return m; });
+
+const sqPos = i => new THREE.Vector3((i % 8) - 3.5, 0, 3.5 - Math.floor(i / 8));
+const sqIndex = name => (+name[1] - 1) * 8 + FILES.indexOf(name[0]);
+
+/* arrows, circles and coloured squares the streamer draws; arrows arc over the pieces and
+   draw on top of everything, so a piece never hides one */
+const MARK_COLOURS = { green: 0x3fae49, red: 0xe0483e, blue: 0x3b82e0, orange: 0xf0a020 };
+const markMats = {};
+function markMat(colour, kind){
+  const k = colour + kind;
+  if (!markMats[k]) markMats[k] = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(MARK_COLOURS[colour] || MARK_COLOURS.orange).convertSRGBToLinear(),
+    transparent: true, opacity: kind === 'square' ? 0.5 : 0.9,
+    side: THREE.DoubleSide, depthWrite: false, depthTest: kind !== 'arrow',
+  });
+  return markMats[k];
+}
+function arrowGeometry(from, to){
+  const a = sqPos(sqIndex(from)), b = sqPos(sqIndex(to));
+  a.y = b.y = 0.04;
+  const top = a.clone().add(b).multiplyScalar(0.5);
+  top.y = 2 * Math.min(0.75, 0.15 + 0.07 * a.distanceTo(b));  // a quadratic curve peaks at half its control point
+  const curve = new THREE.QuadraticBezierCurve3(a, top, b);
+  const side = new THREE.Vector3(b.z - a.z, 0, a.x - b.x).normalize();
+  const W = 0.085, HEAD_W = 0.3, HEAD_L = 0.45, N = 48;  // half widths
+  const shaftEnd = 1 - HEAD_L / curve.getLength();
+  const pos = [], idx = [];
+  for (let i = 0; i <= N; i++){
+    const p = curve.getPointAt(shaftEnd * i / N);
+    pos.push(p.x + side.x * W, p.y, p.z + side.z * W, p.x - side.x * W, p.y, p.z - side.z * W);
+    if (i) idx.push(2 * i - 2, 2 * i - 1, 2 * i, 2 * i - 1, 2 * i + 1, 2 * i);
+  }
+  const h = curve.getPointAt(shaftEnd), k = pos.length / 3;
+  pos.push(h.x + side.x * HEAD_W, h.y, h.z + side.z * HEAD_W, h.x - side.x * HEAD_W, h.y, h.z - side.z * HEAD_W, b.x, b.y, b.z);
+  idx.push(k, k + 1, k + 2);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  return g;
+}
+const marksGroup = new THREE.Group(); scene.add(marksGroup);
+const ringGeo = new THREE.RingGeometry(0.38, 0.46, 48), squareGeo = new THREE.PlaneGeometry(1, 1);
+function flatMark(geo, mat, sq, y){
+  const m = new THREE.Mesh(geo, mat); m.rotation.x = -Math.PI / 2;
+  const p = sqPos(sqIndex(sq)); m.position.set(p.x, y, p.z);
+  marksGroup.add(m);
+}
+function drawMarks(m){
+  for (const o of marksGroup.children.slice()){
+    if (o.geometry !== ringGeo && o.geometry !== squareGeo) o.geometry.dispose();
+    marksGroup.remove(o);
+  }
+  if (m){
+    for (const q of m.squares || []) flatMark(squareGeo, markMat(q.color, 'square'), q.sq, 0.004);
+    for (const c of m.circles || []) flatMark(ringGeo, markMat(c.color, 'circle'), c.sq, 0.009);
+    for (const a of m.arrows || []){
+      const mesh = new THREE.Mesh(arrowGeometry(a.from, a.to), markMat(a.color, 'arrow'));
+      mesh.renderOrder = 10; marksGroup.add(mesh);
+    }
+  }
+  dirty = true;
+}
+
+/* piece geometry */
+const V2 = (r, y) => new THREE.Vector2(r, y);
+function arc(cy, rad, a0, a1, n = 10){
+  const pts = [];
+  for (let i = 0; i <= n; i++){ const a = a0 + (a1 - a0) * i / n; pts.push([Math.max(0, rad * Math.sin(a)), cy - rad * Math.cos(a)]); }
+  return pts;
+}
+const BASE = [[0, 0], [0.34, 0], [0.345, 0.04], [0.33, 0.07], [0.3, 0.09], [0.3, 0.11], [0.25, 0.13]];
+function lathe(pts){
+  const g = new THREE.LatheGeometry(pts.map(([r, y]) => V2(r, y)), 48);
+  g.computeVertexNormals();
+  return g;
+}
+const GEO = {};
+GEO.p = [lathe([...BASE, [0.2, 0.16], [0.14, 0.23], [0.11, 0.33], [0.1, 0.38], [0.165, 0.4], [0.165, 0.43], [0.085, 0.45], ...arc(0.545, 0.118, 0.8, Math.PI)])];
+GEO.r = (() => {
+  const body = lathe([...BASE, [0.23, 0.16], [0.2, 0.22], [0.18, 0.5], [0.22, 0.54], [0.25, 0.57], [0.25, 0.72], [0.17, 0.72], [0.17, 0.66], [0, 0.66]]);
+  const parts = [body];
+  for (let i = 0; i < 6; i++){
+    const b = new THREE.BoxGeometry(0.11, 0.08, 0.08);
+    b.translate(0, 0.76, 0.21);
+    b.rotateY(i * Math.PI / 3);
+    parts.push(b);
+  }
+  return parts;
+})();
+GEO.b = [lathe([...BASE, [0.21, 0.16], [0.14, 0.24], [0.1, 0.42], [0.17, 0.46], [0.17, 0.49], [0.1, 0.51],
+  ...arc(0.665, 0.16, 0.68, Math.PI * 0.92, 12).map(([r, y]) => [r * 0.9, y]), [0.03, 0.83], ...arc(0.875, 0.045, 0.6, Math.PI)])];
+GEO.q = (() => {
+  const body = lathe([...BASE, [0.22, 0.16], [0.15, 0.25], [0.11, 0.52], [0.11, 0.58], [0.2, 0.62], [0.2, 0.65], [0.12, 0.68],
+    [0.15, 0.74], [0.215, 0.84], [0.215, 0.865], [0.14, 0.87], [0.1, 0.92], ...arc(0.97, 0.055, 0.9, Math.PI)]);
+  const parts = [body];
+  for (let i = 0; i < 9; i++){
+    const s = new THREE.SphereGeometry(0.036, 12, 10);
+    s.translate(Math.cos(i * Math.PI * 2 / 9) * 0.2, 0.885, Math.sin(i * Math.PI * 2 / 9) * 0.2);
+    parts.push(s);
+  }
+  return parts;
+})();
+GEO.k = (() => {
+  const body = lathe([...BASE, [0.23, 0.16], [0.16, 0.25], [0.12, 0.54], [0.12, 0.63], [0.21, 0.67], [0.21, 0.7], [0.13, 0.73],
+    [0.17, 0.8], [0.205, 0.9], [0.205, 0.925], [0.11, 0.955], [0.06, 0.985], [0, 0.995]]);
+  const v = new THREE.BoxGeometry(0.06, 0.22, 0.06); v.translate(0, 1.09, 0);
+  const h = new THREE.BoxGeometry(0.17, 0.06, 0.06); h.translate(0, 1.11, 0);
+  return [body, v, h];
+})();
+GEO.n = (() => {
+  const base = lathe([...BASE, [0.23, 0.16], [0.21, 0.2], [0, 0.2]]);
+  const pts = [[-0.22, 0.17], [0.2, 0.17], [0.17, 0.27], [0.07, 0.4], [0.11, 0.46], [0.27, 0.5], [0.33, 0.56], [0.31, 0.63],
+    [0.15, 0.71], [0.09, 0.79], [0.04, 0.88], [-0.02, 0.81], [-0.1, 0.79], [-0.2, 0.68], [-0.25, 0.5], [-0.25, 0.3]];
+  const shape = new THREE.Shape(pts.map(([x, y]) => V2(x, y)));
+  const head = new THREE.ExtrudeGeometry(shape, { depth: 0.16, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.035, bevelSegments: 3, curveSegments: 6 });
+  head.translate(0, 0, -0.08);
+  head.computeVertexNormals();
+  return [base, head];
+})();
+const MAT = {
+  w: new THREE.MeshStandardMaterial({ color: 0xf1e8d4, roughness: 0.42, metalness: 0.02 }),
+  b: new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 0.3, metalness: 0.1 }),
+};
+/* the real pieces: Poly Haven's "Chess Set" by Riley Queen (CC0), packed by tools/make_pieces.py.
+   Until it has loaded (or if it can't), the turned pieces above stand in, and loading swaps them. */
+const MODEL = {}, MODEL_SCALE = 16, MODEL_MAT = {};
+/* both sides of the model share one light colour map, tinted with the chosen colour (Settings › Piece colours) */
+const pieceColours = { w: '#ffffff', b: '#3e3b35' };
+const pieceWood = { value: 0 };
+function paintPieces(w, b, wood){
+  Object.assign(pieceColours, { w, b });
+  pieceWood.value = wood ? 1 : 0;
+  for (const c of 'wb'){
+    if (MODEL_MAT[c]) MODEL_MAT[c].color.set(pieceColours[c]).convertSRGBToLinear();
+    MAT[c].color.set(pieceColours[c]).convertSRGBToLinear();
+  }
+  dirty = true;
+}
+/* wood for the pieces is drawn in the shader: long grain, as if each piece were turned from a blank
+   cut off-centre from a log, so the growth rings sweep up the piece as gently wavy stripes */
+function addWoodGrain(mat){
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uWood = pieceWood;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWoodPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWoodPos = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vWoodPos;
+uniform float uWood;
+float woodHash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float woodNoise(vec3 x){
+  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(woodHash(i), woodHash(i + vec3(1, 0, 0)), f.x), mix(woodHash(i + vec3(0, 1, 0)), woodHash(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(woodHash(i + vec3(0, 0, 1)), woodHash(i + vec3(1, 0, 1)), f.x), mix(woodHash(i + vec3(0, 1, 1)), woodHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+if (uWood > 0.5){
+  vec3 p = vWoodPos * 100.0; // the model is in metres, so a piece is about 4 units across
+  float ring = fract(1.4 * (length(p.xz - vec2(9.0, -6.0)) + 1.6 * woodNoise(p * vec3(0.35, 0.04, 0.35))));
+  float late = smoothstep(0.55, 0.9, ring) * (1.0 - smoothstep(0.9, 1.0, ring));
+  float fibre = woodNoise(p * vec3(6.0, 0.25, 6.0));
+  diffuseColor.rgb *= (1.06 - 0.32 * late) * (0.93 + 0.1 * fibre);
+}`);
+  };
+}
+if (THREE.GLTFLoader) new THREE.GLTFLoader().load('pieces.glb', gltf => {
+  for (const o of gltf.scene.children) MODEL[o.name] = o;
+  gltf.scene.traverse(o => { if (o.isMesh) MODEL_MAT[o.material.name === 'black' ? 'b' : 'w'] = o.material; });
+  for (const c of 'wb') addWoodGrain(MODEL_MAT[c]);
+  paintPieces(pieceColours.w, pieceColours.b, pieceWood.value);
+  for (const g of view.meshes) if (g) fillPiece(g, g.userData.ch);
+  dirty = true;
+  loadProps();
+}, undefined, err => { console.warn('pieces.glb', err); loadProps(); });
+function fillPiece(g, ch){
+  const color = ch === ch.toUpperCase() ? 'w' : 'b', knight = ch.toLowerCase() === 'n';
+  g.clear();
+  if (MODEL[ch]){
+    /* the model's white pieces face +z, ours face -z; knights of both colours turn side-on to show their profile */
+    const m = MODEL[ch].clone();
+    m.scale.setScalar(MODEL_SCALE);
+    m.rotation.y = knight ? -Math.PI / 2 : color === 'w' ? Math.PI : 0;
+    m.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+    g.add(m);
+  } else {
+    for (const geo of GEO[ch.toLowerCase()]){
+      const m = new THREE.Mesh(geo, MAT[color]);
+      m.castShadow = true; m.receiveShadow = true;
+      if (knight) m.rotation.y = color === 'w' ? Math.PI / 6 : Math.PI + Math.PI / 6;
+      g.add(m);
+    }
+  }
+  g.userData.ch = ch;
+}
+function makePiece(ch){
+  const g = new THREE.Group();
+  fillPiece(g, ch);
+  return g;
+}
+
+/* sync 3D pieces to a board, animating the difference */
+const view = { board: new Array(64).fill('.'), meshes: new Array(64).fill(null) };
+const tweens = [];
+function sync3D(next, animate){
+  const old = view.board, meshes = view.meshes;
+  const removed = [], added = [];
+  for (let i = 0; i < 64; i++){
+    if (old[i] !== next[i]){ if (old[i] !== '.') removed.push(i); if (next[i] !== '.') added.push(i); }
+  }
+  const used = new Set(), nm = meshes.slice();
+  for (const r of removed) nm[r] = null;
+  const now = performance.now(), dur = animate ? (reduceMotion ? 120 : 420) : 0;
+  for (const a of added){
+    let bestR = -1, bestD = 1e9;
+    for (const r of removed){
+      if (used.has(r) || old[r] !== next[a]) continue;
+      const d = Math.hypot((r % 8) - (a % 8), (r >> 3) - (a >> 3));
+      if (d < bestD){ bestD = d; bestR = r; }
+    }
+    if (bestR >= 0){
+      used.add(bestR);
+      const g = meshes[bestR]; nm[a] = g;
+      const isKnight = next[a].toLowerCase() === 'n';
+      tweens.push({ obj: g, kind: 'move', from: g.position.clone(), to: sqPos(a), t0: now, dur, hop: reduceMotion ? 0 : (isKnight ? 0.55 : Math.min(0.25, 0.06 * bestD)) });
+    } else {
+      const g = makePiece(next[a]); g.position.copy(sqPos(a)); scene.add(g); nm[a] = g;
+      g.scale.setScalar(dur ? 0.001 : 1);
+      if (dur) tweens.push({ obj: g, kind: 'appear', t0: now + dur * 0.4, dur: dur * 0.8 });
+    }
+  }
+  for (const r of removed){
+    if (used.has(r)) continue;
+    const g = meshes[r];
+    if (!g) continue;
+    if (dur) tweens.push({ obj: g, kind: 'vanish', t0: now + dur * 0.55, dur: dur * 0.6 });
+    else scene.remove(g);
+  }
+  view.board = next.slice(); view.meshes = nm;
+  dirty = true;
+}
+function runTweens(now){
+  for (let i = tweens.length - 1; i >= 0; i--){
+    const t = tweens[i];
+    const k = t.dur ? Math.min(1, Math.max(0, (now - t.t0) / t.dur)) : 1;
+    if (now < t.t0 && t.kind !== 'move') continue;
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    if (t.kind === 'move'){
+      t.obj.position.lerpVectors(t.from, t.to, e);
+      t.obj.position.y = Math.sin(Math.PI * e) * t.hop;
+    } else if (t.kind === 'appear'){
+      t.obj.scale.setScalar(Math.max(0.001, e));
+    } else if (t.kind === 'vanish'){
+      t.obj.scale.setScalar(Math.max(0.001, 1 - e));
+      t.obj.position.y = -0.25 * e;
+    }
+    if (k >= 1){
+      if (t.kind === 'vanish') scene.remove(t.obj);
+      tweens.splice(i, 1);
+    }
+  }
+}
+
+/* camera orbit */
+function placeCamera(){
+  const sp = Math.sin(orbit.pol), az = orbit.az + orbit.sway;
+  const d = orbit.base * orbit.zoom;
+  camera.position.set(d * sp * Math.sin(az), d * Math.cos(orbit.pol), d * sp * Math.cos(az));
+  camera.lookAt(0, -0.35, 0.45 * Math.cos(az));
+  // fog starts past the board, so only the table fades
+  scene.fog.near = table.visible ? d + 5 : 1e4;
+  scene.fog.far = table.visible ? d + 42 : 1e4;
+}
+let drag = null;
+const cv = renderer.domElement;
+cv.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY };
+  orbit.az -= dx * 0.008; orbit.azTarget = orbit.az;
+  orbit.pol = orbit.polTarget = Math.min(1.32, Math.max(0.12, orbit.pol - dy * 0.006));
+  if (dx || dy) showView(null);
+  dirty = true;
+});
+cv.addEventListener('pointerup', () => { drag = null; });
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  orbit.zoom = orbit.zoomTarget = Math.min(1.7, Math.max(0.55, orbit.zoomTarget * (1 + Math.sign(e.deltaY) * 0.08)));
+  showView(null); dirty = true;
+}, { passive: false });
+function turnTo(az){ orbit.azTarget = az; if (reduceMotion) orbit.az = az; dirty = true; }
+$('#flipBtn').onclick = $('#camFlip').onclick = () => turnTo(orbit.azTarget + Math.PI);
+
+/* camera presets (the bar at the top right), seen from the side the camera is on now */
+const VIEWS = {
+  overview: { pol: 0.74, zoom: 1 },
+  top: { pol: 0.12, zoom: 0.98 },
+  player: { pol: 1.13, zoom: 0.74 },
+  side: { pol: 0.9, zoom: 0.92, side: true },  // from the side across from the clock, which stands beyond the board
+  table: { pol: 0.88, zoom: 1.7 },
+};
+function shortestTurn(want){ return orbit.azTarget + Math.atan2(Math.sin(want - orbit.azTarget), Math.cos(want - orbit.azTarget)); }
+function showView(name){
+  for (const b of document.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed', b.dataset.view === name ? 'true' : 'false');
+  const v = VIEWS[name];
+  if (!v) return;
+  // White's side (az 0) or Black's (az π): the nearer one, or the video's when side-on
+  const c = Math.cos(orbit.azTarget);
+  const home = Math.abs(c) > 0.3 ? (c > 0 ? 0 : Math.PI) : S.viewWb === false ? Math.PI : 0;
+  turnTo(shortestTurn(v.side ? -clock.side * Math.PI / 2 : home));
+  orbit.polTarget = v.pol; orbit.zoomTarget = v.zoom;
+  if (reduceMotion){ orbit.pol = v.pol; orbit.zoom = v.zoom; }
+  dirty = true;
+}
+for (const b of document.querySelectorAll('[data-view]')) b.onclick = () => showView(b.dataset.view);
+/* auto-rotate: swing slowly left and right around wherever the camera is pointed, about 25° each
+   way over two and a half minutes, never faster than about 1° a second, so it doesn't pull the eye */
+const SWAY = { on: false, phase: 0, amp: 0.45, period: 140 };
+function setSway(on){
+  if (!on && SWAY.on){
+    // stop where it is
+    orbit.az += orbit.sway; orbit.azTarget += orbit.sway; orbit.sway = 0;
+  }
+  SWAY.on = on; SWAY.phase = 0;
+  $('#swayBtn').setAttribute('aria-pressed', on ? 'true' : 'false');
+  try { localStorage.setItem('shadowboard.sway', on ? '1' : '0'); } catch (e) {}
+  dirty = true;
+}
+$('#swayBtn').onclick = () => setSway(!SWAY.on);
+/* view the board from the same side as the video: White's side (az 0) or Black's (az π) */
+function faceSide(whiteBottom){
+  const want = whiteBottom ? 0 : Math.PI;
+  turnTo(orbit.az + Math.atan2(Math.sin(want - orbit.az), Math.cos(want - orbit.az)));
+}
+/* which way up the video's board is can change from game to game, so follow the position on
+   show (before the first one, the first game's) and turn when a game is played from the other side */
+function faceVideo(){
+  const ev = S.events[Math.max(S.idx, 0)];
+  const wb = ev && ev.wb != null ? ev.wb : S.whiteBottom;
+  if (wb == null || wb === S.viewWb) return;
+  S.viewWb = wb;
+  faceSide(wb);
+  if ($('#orient').value === 'auto') $('#orient').options[0].textContent = 'Detect (now: ' + (wb ? 'White' : 'Black') + ' at bottom)';
+}
+
+function resize3D(){
+  const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  const aspect = w / h;
+  camera.aspect = aspect;
+  // Fill the height on wide screens; back off on narrow ones so the whole board fits.
+  orbit.base = 14.2 * Math.max(1, 1.45 / aspect);
+  const wide = aspect > 1.15 && w > 700;
+  // Wide: slide the board right, beside the video card. Tall: centre it in the room above the card,
+  // as big as fits there.
+  if (wide) camera.setViewOffset(w, h, -Math.round(w * 0.085), 0, w, h);
+  else if (aspect < 0.9){
+    const free = Math.max(h * 0.4, $('#tools').getBoundingClientRect().top);
+    orbit.base = 14.2 * Math.max(1, 1.3 / aspect, 0.92 * h / free);
+    camera.setViewOffset(w, h, 0, Math.round((h - free) / 2), w, h);
+  }
+  else camera.clearViewOffset();
+  camera.updateProjectionMatrix();
+  dirty = true;
+}
+new ResizeObserver(resize3D).observe(sceneEl);
+let dirty = true;
+let lastFrame = 0;
+function loop(now){
+  let moving = false;
+  const dt = Math.min(0.1, (now - (lastFrame || now)) / 1000); lastFrame = now;
+  // ease towards the targets at the same pace whatever the frame rate
+  const k = 1 - Math.exp(-7 * (dt || 1 / 60));
+  if (Math.abs(orbit.azTarget - orbit.az) > 0.001){ orbit.az += (orbit.azTarget - orbit.az) * k; moving = true; }
+  if (Math.abs(orbit.polTarget - orbit.pol) > 0.0005){ orbit.pol += (orbit.polTarget - orbit.pol) * k; moving = true; }
+  if (Math.abs(orbit.zoomTarget - orbit.zoom) > 0.0005){ orbit.zoom += (orbit.zoomTarget - orbit.zoom) * k; moving = true; }
+  if (SWAY.on){
+    SWAY.phase += dt * 2 * Math.PI / SWAY.period;
+    orbit.sway = SWAY.amp * Math.sin(SWAY.phase);
+    moving = true;
+  }
+  if (tweens.length){ runTweens(now); moving = true; }
+  if (moving || dirty){
+    placeCamera();
+    renderer.render(scene, camera);
+    dirty = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+
+/* ---------- app ---------- */
+const S = { source: null, videoId: null, src: null, events: [], status: null, error: null, region: null, manual: false,
+  W: 0, H: 0, duration: 0, progress: 0, download: 0, cropped: false, idx: -2, fen: START_FEN, pollTimer: null, fixing: false,
+  whiteBottom: null, player: null, playerReady: false, marks: [], markIdx: -2, showMarks: true, stop: null, saved: false,
+  stream: null, t0: 0 };
+const stage = $('#stage'), card = $('#card'), video = $('#video'), still = $('#still');
+new ResizeObserver(resize3D).observe(card);
+const overlay = $('#overlay'), octx = overlay.getContext('2d'), hintEl = $('#hint');
+/* the status above the video; while nothing is in progress, routine messages fade after a while */
+let hintTimer = 0;
+function hint(m, warn){
+  if (m === hintEl.dataset.msg && !!warn === hintEl.classList.contains('warn')) return;
+  hintEl.dataset.msg = m; hintEl.textContent = m; hintEl.title = m;
+  hintEl.classList.toggle('warn', !!warn);
+  hintEl.classList.remove('quiet');
+  clearTimeout(hintTimer);
+  const busy = S.fixing || ['downloading', 'loading', 'finding_board', 'processing', 'stopped'].includes(S.status);
+  if (!warn && !busy) hintTimer = setTimeout(() => hintEl.classList.add('quiet'), 5000);
+}
+const mmss = t => { t = Math.max(0, Math.floor(t)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); };
+
+/* players: YouTube's own embedded player, a <video> for local files, or one showing the tab
+   being shared (whose time is how long it has been shared) */
+function playerTime(){
+  if (S.source === 'youtube' && S.player && S.playerReady) return S.player.getCurrentTime() || 0;
+  if (S.source === 'upload') return video.currentTime || 0;
+  if (S.source === 'screen' && S.stream) return (performance.now() - S.t0) / 1000;
+  return 0;
+}
+function pausePlayer(){
+  try { if (S.source === 'youtube' && S.playerReady) S.player.pauseVideo(); } catch (e) {}
+  if (S.source === 'upload') video.pause();
+}
+function loadYouTubeAPI(){
+  return new Promise(res => {
+    if (window.YT && window.YT.Player) return res();
+    window.onYouTubeIframeAPIReady = res;
+    const s = document.createElement('script');
+    s.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(s);
+  });
+}
+async function showYouTube(id){
+  await loadYouTubeAPI();
+  const el = $('#yt'); if (el) el.style.display = '';
+  if (S.player){ S.player.loadVideoById(id); return; }
+  S.player = new YT.Player('yt', {
+    videoId: id, width: '100%', height: '100%',
+    playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
+    events: { onReady: () => { S.playerReady = true; layoutPlayer(); }, onStateChange: e => { if (e.data === YT.PlayerState.ENDED) stopRecording(); } },
+  });
+}
+
+/* starting: the server downloads YouTube videos; this page does all the reading */
+function stopReading(){ S.reading = null; if (S.stop){ S.stop(); S.stop = null; } }
+function clearReading(){
+  stopReading();
+  Object.assign(S, { events: [], idx: -2, marks: [], markIdx: -2, whiteBottom: null, viewWb: null, progress: 0, saved: false });
+}
+function resetAll(){
+  stopRecording();
+  clearTimeout(S.pollTimer);
+  clearReading();
+  if (S.source === 'upload' && S.src) URL.revokeObjectURL(S.src);
+  if (S.stillVideo){ closeVideo(S.stillVideo); S.stillVideo = null; }
+  if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+  Object.assign(S, { source: null, videoId: null, src: null, file: null, status: null, error: null, region: null, manual: false,
+    W: 0, H: 0, duration: 0, download: 0, fen: START_FEN, stream: null });
+  $('#orient').value = 'auto'; $('#orient').options[0].textContent = 'Detect';
+  endFix(true);
+  setCrop(false);
+  try { if (S.player && S.playerReady) S.player.stopVideo(); } catch (e) {}
+  const yt = $('#yt'); if (yt) yt.style.display = 'none';
+  video.pause(); video.srcObject = null; video.removeAttribute('src'); video.load(); video.hidden = true;
+  $('#progress').style.width = '0';
+  sync3D(fenToBoard(START_FEN), false); highlight(null); drawMarks(null);
+  updateSheets(); setRockers(); drawClock();
+  updateButtons();
+}
+function showEmpty(err){
+  resetAll();
+  setIdle(true);
+  $('#emptyErr').hidden = !err; $('#emptyErr').textContent = err || '';
+  history.replaceState(null, '', location.pathname);
+  hint('');
+}
+async function startYouTube(url){
+  resetAll();
+  warmUp();
+  let r;
+  try { r = await fetch('/api/videos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) }); }
+  catch (e) { return showEmpty('Can\u2019t reach the server.'); }
+  if (!r.ok) return showEmpty(r.status === 400 ? 'That doesn\u2019t look like a YouTube video link.' : 'The server couldn\u2019t start on that video.');
+  const j = await r.json();
+  Object.assign(S, { source: 'youtube', videoId: j.video_id });
+  history.replaceState(null, '', '#v=' + j.video_id);
+  markWatched(j.video_id);
+  setIdle(false);
+  showYouTube(j.video_id);
+  // someone has read this video before: use their reading, no work to do
+  if (j.results){
+    const res = await fetch(`/api/videos/${j.video_id}/results`).then(x => x.ok ? x.json() : null).catch(() => null);
+    // readings saved before positions carried their orientation (version 2), or before a board
+    // flipped mid-video was noticed reliably (version 4), may have a game the wrong way up: read
+    // those again
+    if (res && res.version >= 4 && S.videoId === j.video_id){
+      S.saved = true;
+      update({ status: 'done', region: res.region, width: res.width, height: res.height, duration: res.duration,
+        progress: 1, events: res.events, marks: res.marks, whiteBottom: res.white_bottom });
+    }
+  }
+  pollDownload();
+}
+async function pollDownload(){
+  clearTimeout(S.pollTimer);
+  const vid = S.videoId;
+  if (!vid) return;
+  let j;
+  try {
+    const r = await fetch('/api/videos/' + vid);
+    if (r.status === 404) return startYouTube('https://youtu.be/' + vid);  // the server restarted
+    j = await r.json();
+  } catch (e) { S.pollTimer = setTimeout(pollDownload, 3000); return; }
+  if (vid !== S.videoId) return;
+  if (j.status === 'ready'){
+    S.src = `/api/videos/${vid}/file`;
+    if (S.status !== 'done') startReading();
+    updateButtons();
+    return;
+  }
+  if (j.status === 'error'){ if (S.status !== 'done') update({ status: 'error', error: j.error }); return; }
+  if (S.status !== 'done'){
+    S.download = j.download || 0;
+    update({ status: 'downloading' });
+  }
+  S.pollTimer = setTimeout(pollDownload, 1000);
+}
+function startUpload(file){
+  resetAll();
+  warmUp();
+  Object.assign(S, { source: 'upload', src: URL.createObjectURL(file), file });
+  video.src = S.src; video.hidden = false;
+  setIdle(false);
+  startReading();
+}
+/* sharing a tab: the viewer plays the video there, and the board is read from what it shows
+   as it plays. This page keeps the focus where the browser allows, so the 3D board stays in view. */
+async function startScreen(){
+  resetAll();
+  warmUp();
+  const controller = window.CaptureController ? new CaptureController() : null;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { displaySurface: 'browser', frameRate: { ideal: 15 }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'include',
+      ...(controller && { controller }),
+    });
+  } catch (e) {
+    return showEmpty(e && e.name === 'NotAllowedError' ? '' : 'Couldn\u2019t share the screen in this browser.');
+  }
+  try { if (controller) controller.setFocusBehavior('no-focus-change'); } catch (e) {}
+  Object.assign(S, { source: 'screen', stream, t0: performance.now() });
+  video.srcObject = stream; video.muted = true; video.hidden = false;
+  video.play().catch(() => {});
+  // sharing stopped from the browser's own bar (or the tab closed)
+  for (const t of stream.getVideoTracks()) t.addEventListener('ended', () => { if (S.stream === stream) stopScreen(); });
+  setIdle(false);
+  layoutPlayer();
+  startReading();
+}
+video.addEventListener('loadedmetadata', updateButtons);
+function stopScreen(){
+  stopReading();
+  // keep the last frame on show
+  if (video.videoWidth){
+    setCrop(false);
+    still.width = video.videoWidth; still.height = video.videoHeight;
+    still.getContext('2d').drawImage(video, 0, 0);
+    still.hidden = false;
+  }
+  if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+  S.stream = null;
+  update({ status: 'stopped' });
+}
+function startReading(region = S.manual ? S.region : null){
+  clearReading();
+  const token = S.reading = {};
+  const on = u => { if (S.reading === token) update(u); };
+  if (S.source === 'screen') S.stop = readScreen(video, { region, orientation: $('#orient').value, on });
+  else S.stop = readVideo(S.src, { file: S.file, region, orientation: $('#orient').value, on });
+}
+/* the start card: a link, a file, or an episode of one of the series (from the server, which keeps
+   them up to date from YouTube, or the copy that comes with the page) */
+function setIdle(on){
+  $('#empty').hidden = !on;
+  card.classList.toggle('idle', on);
+  if (on) showSeries();
+}
+let watched = [];
+try { watched = JSON.parse(localStorage.getItem('shadowboard.watched')) || []; } catch (e) {}
+function markWatched(id){
+  if (watched.includes(id)) return;
+  watched = [...watched, id].slice(-1000);
+  try { localStorage.setItem('shadowboard.watched', JSON.stringify(watched)); } catch (e) {}
+}
+let seriesList = null, seriesKey = null;
+try { seriesKey = localStorage.getItem('shadowboard.series'); } catch (e) {}
+const seriesLoad = LIVE ? Promise.resolve([]) : fetch('/api/series').then(r => r.ok ? r.json() : Promise.reject())
+  .catch(() => fetch('series.json').then(r => r.json()))
+  .then(list => { seriesList = (list || []).filter(s => s.episodes && s.episodes.length); }).catch(() => { seriesList = []; });
+async function showSeries(){
+  await seriesLoad;
+  if ($('#empty').hidden || !$('#series')) return;
+  $('#series').hidden = !seriesList.length;
+  if (!seriesList.length) return;
+  if (!seriesList.some(s => s.key === seriesKey)) seriesKey = seriesList[0].key;
+  const tabs = $('#seriesTabs');
+  tabs.textContent = '';
+  for (const s of seriesList){
+    const b = document.createElement('button');
+    b.type = 'button'; b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', s.key === seriesKey ? 'true' : 'false');
+    const by = document.createElement('span'); by.textContent = s.channel;
+    b.append(s.title, by);
+    b.onclick = () => {
+      seriesKey = s.key;
+      try { localStorage.setItem('shadowboard.series', s.key); } catch (e) {}
+      showSeries();
+    };
+    tabs.append(b);
+  }
+  const s = seriesList.find(x => x.key === seriesKey), list = $('#episodes');
+  list.textContent = '';
+  list.setAttribute('aria-label', s.title + ' episodes');
+  // carry on after the last episode watched
+  let next = 0;
+  s.episodes.forEach((e, i) => { if (watched.includes(e.id)) next = i + 1; });
+  if (next >= s.episodes.length) next = 0;
+  s.episodes.forEach((e, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'ep' + (watched.includes(e.id) ? ' watched' : '');
+    b.title = e.title;
+    const thumb = document.createElement('span'); thumb.className = 'thumb';
+    const img = new Image(); img.loading = 'lazy'; img.alt = ''; img.src = `https://i.ytimg.com/vi/${e.id}/mqdefault.jpg`;
+    thumb.append(img);
+    if (e.duration){ const d = document.createElement('span'); d.className = 'dur'; d.textContent = mmss(e.duration); thumb.append(d); }
+    const upNext = next > 0 && i === next;
+    if (upNext || e.ready){
+      const t = document.createElement('span');
+      t.className = upNext ? 'tag' : 'tag ready';
+      t.textContent = upNext ? 'Up next' : 'Ready';
+      if (!upNext) t.title = 'Read before: opens with no wait';
+      thumb.append(t);
+    }
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = `${i + 1} of ${s.episodes.length}`;
+    const title = document.createElement('span'); title.className = 'title'; title.textContent = e.title;
+    b.append(thumb, title, n);
+    b.onclick = () => startYouTube('https://youtu.be/' + e.id);
+    list.append(b);
+  });
+  list.scrollLeft = next ? list.children[next].offsetLeft - list.offsetLeft - 2 : 0;
+  updateEpNav();
+}
+function updateEpNav(){
+  const l = $('#episodes');
+  $('#epPrev').disabled = l.scrollLeft < 4;
+  $('#epNext').disabled = l.scrollLeft + l.clientWidth > l.scrollWidth - 4;
+}
+if ($('#episodes')){
+  $('#episodes').addEventListener('scroll', updateEpNav, { passive: true });
+  for (const [id, dir] of [['#epPrev', -1], ['#epNext', 1]]){
+    $(id).onclick = () => { const l = $('#episodes'); l.scrollBy({ left: dir * l.clientWidth * 0.85, behavior: reduceMotion ? 'auto' : 'smooth' }); };
+  }
+}
+function resume(){
+  const v = new URLSearchParams(location.hash.slice(1)).get('v');
+  if (v && !LIVE) startYouTube('https://youtu.be/' + v);
+}
+
+/* what the reader (or a saved reading) reports */
+function update(u){
+  for (const [list, add] of [[S.events, u.events || []], [S.marks, u.marks || []]]){
+    for (const e of add){
+      const prevT = list.length ? list[list.length - 1].t : 0;
+      list.push({ ...e, t: Math.max(e.t, prevT) });
+    }
+  }
+  if (u.status) S.status = u.status;
+  if (u.status) S.error = u.status === 'error' ? u.error : null;
+  if (u.progress != null) S.progress = u.progress;
+  if (u.width){ S.W = u.width; S.H = u.height; S.duration = u.duration; }
+  if (u.region){
+    const had = !!S.region;
+    S.region = u.region;
+    if (!had) layoutPlayer(); else drawOverlay();
+  }
+  // a shared tab changed size or stopped showing the board: it's being looked for again
+  if (u.lost){ S.region = null; S.manual = false; setCrop(false); }
+  if (u.whiteBottom != null) S.whiteBottom = u.whiteBottom;
+  faceVideo();
+  $('#progress').style.width = (S.status === 'downloading' ? 100 * S.download : 100 * S.progress) + '%';
+  $('#progress').parentElement.classList.toggle('done', S.status === 'done' || S.status === 'error' || S.source === 'screen');
+  updateButtons();
+  statusHint();
+  if (S.status === 'done') saveReading();
+}
+/* share a finished reading of a YouTube video, so the next viewer of it can skip the work;
+   only the automatic one: a board drawn by hand fits this viewer's needs, maybe not theirs */
+function saveReading(){
+  if (S.saved || S.source !== 'youtube' || S.manual || $('#orient').value !== 'auto') return;
+  S.saved = true;
+  const body = { version: 4, events: S.events, marks: S.marks, region: S.region, width: S.W, height: S.H, duration: S.duration, white_bottom: S.whiteBottom };
+  fetch(`/api/videos/${S.videoId}/results`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+}
+
+const ERRORS = {
+  no_board: 'Couldn\u2019t find a chessboard in this video. Draw it under Settings \u203a Draw the board area yourself.',
+  youtube_blocked: 'YouTube refused to let the server download this video (see the README about cookies).',
+  too_long: 'This video is longer than the server allows.',
+  download_failed: 'The server couldn\u2019t download this video.',
+  unplayable: 'This browser can\u2019t open that video file.',
+  worker_failed: 'Couldn\u2019t load the board reader. Check your connection and reload the page.',
+};
+let shareAgain = null;
+function statusHint(){
+  if (S.fixing) return;
+  const moves = S.events.filter(e => e.san).length;
+  switch (S.status){
+    case 'downloading': return hint(`The server is fetching the video\u2026 ${Math.round(100 * S.download)}%`);
+    case 'loading': return hint(S.source === 'screen' ? 'Getting the board reader ready\u2026' : 'Opening the video\u2026');
+    case 'finding_board': return hint(S.source === 'screen' ? 'Looking for a chessboard in the shared tab\u2026' : 'Looking for the chessboard\u2026');
+    case 'live': return hint('Following the board in the shared tab. Play, pause and skip there.');
+    case 'stopped': {
+      hint('Sharing has stopped.');
+      if (!shareAgain){ shareAgain = document.createElement('button'); shareAgain.textContent = 'Share again'; shareAgain.onclick = () => startScreen(); }
+      hintEl.append(shareAgain);
+      return;
+    }
+    case 'processing': {
+      const done = S.progress * S.duration;
+      return hint(`Reading moves: ${mmss(done)} of ${mmss(S.duration)}. You can press play.`);
+    }
+    case 'done': return hint(moves ? `Ready. ${moves} move${moves > 1 ? 's' : ''} found.` : 'Ready.');
+    case 'error': return hint(ERRORS[S.error] || 'Something went wrong while reading this video.', true);
+  }
+}
+
+/* keep the 3D board in step with the video */
+function indexAt(list, t){
+  let lo = 0, hi = list.length - 1, ans = -1;
+  while (lo <= hi){ const mid = (lo + hi) >> 1; if (list[mid].t <= t){ ans = mid; lo = mid + 1; } else hi = mid - 1; }
+  return ans;
+}
+function highlight(ev){
+  if (ev && ev.from && ev.to){
+    hl[0].position.set(sqPos(sqIndex(ev.from)).x, 0.006, sqPos(sqIndex(ev.from)).z);
+    hl[1].position.set(sqPos(sqIndex(ev.to)).x, 0.006, sqPos(sqIndex(ev.to)).z);
+    hl[0].visible = hl[1].visible = true;
+  } else hl[0].visible = hl[1].visible = false;
+  dirty = true;
+}
+setInterval(() => {
+  if (!S.source) return;
+  // a shared tab is read as it plays: show the latest
+  const t = S.source === 'screen' ? Infinity : playerTime() + 0.1;
+  const i = indexAt(S.events, t);
+  if (i !== S.idx){
+    const step = i === S.idx + 1;
+    S.idx = i;
+    const ev = i >= 0 ? S.events[i] : null;
+    S.fen = ev ? ev.fen : START_FEN;
+    sync3D(fenToBoard(S.fen), step);
+    highlight(ev);
+    // the clock: an increment for whoever just moved, and the rocker down on their side
+    if (step && ev && ev.san){ const moved = ev.fen.split(' ')[1] === 'w' ? 'b' : 'w'; clock.time[moved] += clock.inc; }
+    setRockers(); drawClock();
+    updateSheets();
+    $('#lichessBtn').href = 'https://lichess.org/analysis/standard/' + S.fen.replace(/ /g, '_');
+  }
+  faceVideo();
+  const mi = indexAt(S.marks, t);
+  if (mi !== S.markIdx){ S.markIdx = mi; drawMarks(mi >= 0 ? S.marks[mi] : null); }
+  if (S.status === 'processing' && !S.fixing){
+    const done = S.progress * S.duration;
+    if (t > done + 2) hint(`Still reading this part of the video (analyzed up to ${mmss(done)}).`);
+    else statusHint();
+  }
+}, 150);
+
+/* crop the card to the board */
+function contentBox(){
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  if (!S.W || !S.H) return null;
+  if (S.cropped && S.region){ const s = sw / S.region[2]; return { x: -S.region[0] * s, y: -S.region[1] * s, s }; }
+  const s = Math.min(sw / S.W, sh / S.H);
+  return { x: (sw - S.W * s) / 2, y: (sh - S.H * s) / 2, s };
+}
+function layoutPlayer(){
+  const els = [$('#yt'), video].filter(Boolean);
+  const cb = contentBox();
+  for (const el of els){
+    if (S.cropped && cb){
+      Object.assign(el.style, { left: cb.x + 'px', top: cb.y + 'px', width: S.W * cb.s + 'px', height: S.H * cb.s + 'px' });
+      if (el === video) video.controls = false;
+    } else {
+      el.style.left = el.style.top = el.style.width = el.style.height = '';
+      // a shared tab is played and paused in its own tab
+      if (el === video) video.controls = S.source === 'upload';
+    }
+  }
+  resizeOverlay();
+}
+function setCrop(on){
+  S.cropped = on && !!S.region;
+  card.classList.toggle('cropped', S.cropped);
+  $('#cropBtn').setAttribute('aria-pressed', S.cropped ? 'true' : 'false');
+  if (S.cropped) card.style.setProperty('--ar', (S.region[2] / S.region[3]).toFixed(4));
+  layoutPlayer();
+}
+$('#cropBtn').onclick = () => { endFix(true); setCrop(!S.cropped); };
+stage.addEventListener('click', () => {
+  if (S.cropped && S.source === 'upload' && !S.fixing) video.paused ? video.play() : video.pause();
+});
+
+/* overlay: board outline, and drawing a board box by hand */
+function resizeOverlay(){
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  overlay.width = Math.round(stage.clientWidth * dpr); overlay.height = Math.round(stage.clientHeight * dpr);
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawOverlay();
+}
+new ResizeObserver(() => layoutPlayer()).observe(stage);
+let dragBox = null, dragStart = null;
+function drawOverlay(){
+  const w = stage.clientWidth, h = stage.clientHeight;
+  octx.clearRect(0, 0, w, h);
+  const cb = contentBox();
+  if (!cb) return;
+  let r = dragBox;
+  if (!r && S.region && (S.fixing || !S.cropped)) r = { x: cb.x + S.region[0] * cb.s, y: cb.y + S.region[1] * cb.s, w: S.region[2] * cb.s, h: S.region[3] * cb.s };
+  if (!r) return;
+  if (S.fixing){
+    octx.fillStyle = 'rgba(8,12,10,0.45)';
+    octx.beginPath(); octx.rect(0, 0, w, h); octx.rect(r.x, r.y, r.w, r.h); octx.fill('evenodd');
+  }
+  octx.strokeStyle = '#cfa95f'; octx.lineWidth = S.fixing ? 2 : 1.5;
+  octx.strokeRect(r.x, r.y, r.w, r.h);
+}
+async function startFix(){
+  if (!(S.src || S.stream) || S.fixing) return endFix(true);
+  pausePlayer(); setCrop(false);
+  S.fixing = true;
+  card.classList.add('expanded'); stage.classList.add('drawing');
+  $('#fixBtn').setAttribute('aria-pressed', 'true');
+  hint('Drag a box around the board\u2019s 8\u00d78 squares.');
+  const cancel = document.createElement('button');
+  cancel.textContent = 'Cancel'; cancel.onclick = () => endFix();
+  hintEl.append(cancel);
+  drawOverlay();
+  if (S.source === 'screen'){
+    // hold the shared tab still while the box is drawn
+    S.W = video.videoWidth; S.H = video.videoHeight;
+    still.width = S.W; still.height = S.H;
+    still.getContext('2d').drawImage(video, 0, 0);
+    still.hidden = false;
+    drawOverlay();
+    return;
+  }
+  // show the frame being watched, from a hidden copy of the video
+  const src = S.src;
+  try {
+    if (!S.stillVideo){
+      const v = await openVideo(src);
+      if (S.src !== src || S.stillVideo){ closeVideo(v); return; }
+      S.stillVideo = v;
+    }
+    const v = S.stillVideo;
+    await seek(v, playerTime());
+    if (!S.fixing || S.src !== src) return;
+    S.W = v.videoWidth; S.H = v.videoHeight;
+    still.width = S.W; still.height = S.H;
+    still.getContext('2d').drawImage(v, 0, 0);
+    still.hidden = false;
+    drawOverlay();
+  } catch (e) {}
+}
+function endFix(silent){
+  S.fixing = false; dragBox = dragStart = null;
+  card.classList.remove('expanded'); stage.classList.remove('drawing');
+  $('#fixBtn').setAttribute('aria-pressed', 'false');
+  still.hidden = true;
+  drawOverlay();
+  if (!silent) statusHint();
+}
+$('#fixBtn').onclick = startFix;
+overlay.addEventListener('pointerdown', e => {
+  if (!S.fixing) return;
+  const b = overlay.getBoundingClientRect();
+  dragStart = { x: e.clientX - b.left, y: e.clientY - b.top };
+  dragBox = { ...dragStart, w: 0, h: 0 };
+  overlay.setPointerCapture(e.pointerId);
+});
+overlay.addEventListener('pointermove', e => {
+  if (!dragStart) return;
+  const b = overlay.getBoundingClientRect(), x = e.clientX - b.left, y = e.clientY - b.top;
+  dragBox = { x: Math.min(x, dragStart.x), y: Math.min(y, dragStart.y), w: Math.abs(x - dragStart.x), h: Math.abs(y - dragStart.y) };
+  drawOverlay();
+});
+overlay.addEventListener('pointerup', async () => {
+  if (!dragStart) return;
+  const d = dragBox, cb = contentBox();
+  dragStart = null; dragBox = null;
+  if (!d || d.w < 20 || d.h < 20 || !cb){ drawOverlay(); return; }
+  const box = { x: Math.max(0, (d.x - cb.x) / cb.s), y: Math.max(0, (d.y - cb.y) / cb.s), w: d.w / cb.s, h: d.h / cb.s };
+  S.region = [box.x, box.y, box.w, box.h]; S.manual = true;
+  endFix(true);
+  restart(S.region);
+});
+/* read the video again with new settings (once it's here: until then they just wait) */
+function restart(region){
+  if (!S.source) return;
+  if (S.source === 'screen'){
+    if (S.stream) startReading(region);
+  } else if (S.src){
+    hint('Reading the video again with the new settings\u2026');
+    startReading(region);
+  } else {
+    clearReading();
+    S.status = 'downloading';
+    statusHint();
+    pollDownload();
+  }
+}
+
+/* buttons and menu */
+function updateButtons(){
+  $('#cropBtn').hidden = !S.region || (S.source === 'screen' && !S.stream);
+  $('#fixBtn').disabled = S.source === 'screen' ? !S.stream || !video.videoWidth
+    : !S.src || !['processing', 'done', 'error'].includes(S.status);
+  if (LIVE) $('#newBtn').textContent = S.source === 'screen' && S.stream ? 'Stop sharing' : 'Another video';
+}
+if ($('#urlForm')) $('#urlForm').addEventListener('submit', e => { e.preventDefault(); startYouTube($('#ytUrl').value.trim()); });
+if (LIVE){
+  const canShare = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  $('#shareBtn').disabled = !canShare; $('#noShare').hidden = canShare;
+  $('#shareBtn').onclick = startScreen;
+  // run with its server (app.py), this app can also fetch YouTube videos itself
+  fetch('api/series').then(r => { if (r.ok) $('#serverNote').hidden = false; }).catch(() => {});
+}
+$('#fileBtn').onclick = () => $('#fileInput').click();
+$('#fileInput').onchange = e => { const f = e.target.files && e.target.files[0]; if (f) startUpload(f); e.target.value = ''; };
+$('#newBtn').onclick = () => showEmpty();
+$('#orient').onchange = () => { $('#orient').options[0].textContent = 'Detect'; restart(S.region); };
+$('#autoBtn').onclick = () => { S.region = null; S.manual = false; setCrop(false); restart(null); };
+function setShowMarks(on){
+  S.showMarks = on; marksGroup.visible = on; dirty = true;
+  $('#marksBtn').setAttribute('aria-pressed', on ? 'true' : 'false');
+  try { localStorage.setItem('shadowboard.marks', on ? '1' : '0'); } catch (e) {}
+}
+$('#marksBtn').onclick = () => setShowMarks(!S.showMarks);
+try { if (localStorage.getItem('shadowboard.marks') === '0') setShowMarks(false); } catch (e) {}
+/* colours of the board and pieces, kept in this browser */
+const THEMES = {
+  board: [['Green', '#d9cdae', '#56744f'], ['Brown', '#f0d9b5', '#b58863'], ['Blue', '#dee3e6', '#8ca2ad'],
+    ['Grey', '#e4e4e0', '#8f938e'], ['Coral', '#f3e7d9', '#c97b63'], ['Purple', '#e9e2f0', '#8a74a8'],
+    ['Maple and walnut', '#ecd3a6', '#8b5a34', true], ['Oak', '#e6c99c', '#b07f4c', true],
+    ['Rosewood', '#e8c69c', '#6b3424', true], ['Grey wood', '#dedad2', '#7a7369', true]],
+  pieces: [['Ivory and ebony', '#ffffff', '#3e3b35'], ['Boxwood and rosewood', '#ffd9a3', '#6e3a24', true],
+    ['Maple and walnut', '#ffe6b8', '#5a3820', true], ['Cream and red', '#fff3dc', '#a8352c'],
+    ['Cream and blue', '#fff3dc', '#2f4f86'], ['Silver and gold', '#d6dade', '#c9a23e']],
+};
+const COLOUR_UI = {
+  board: { select: '#boardTheme', inputs: ['#boardLight', '#boardDark'], wood: '#boardWood', paint: paintBoard },
+  pieces: { select: '#pieceTheme', inputs: ['#pieceWhite', '#pieceBlack'], wood: '#pieceWood', paint: paintPieces },
+};
+let colourPrefs = {};
+try { colourPrefs = JSON.parse(localStorage.getItem('shadowboard.colours')) || {}; } catch (e) {}
+function setColours(kind, a, b, wood, save){
+  const ui = COLOUR_UI[kind];
+  ui.paint(a, b, wood);
+  $(ui.inputs[0]).value = a; $(ui.inputs[1]).value = b; $(ui.wood).checked = wood;
+  const i = THEMES[kind].findIndex(([, x, y, w = false]) => x === a && y === b && w === wood);
+  $(ui.select).value = i >= 0 ? String(i) : 'custom';
+  if (save){
+    colourPrefs[kind] = [a, b, wood];
+    try { localStorage.setItem('shadowboard.colours', JSON.stringify(colourPrefs)); } catch (e) {}
+  }
+}
+for (const [kind, ui] of Object.entries(COLOUR_UI)){
+  const sel = $(ui.select);
+  THEMES[kind].forEach(([name], i) => sel.add(new Option(name, String(i))));
+  sel.add(new Option('Custom', 'custom'));
+  sel.onchange = () => { const t = THEMES[kind][+sel.value]; if (t) setColours(kind, t[1], t[2], !!t[3], true); };
+  const changed = () => setColours(kind, $(ui.inputs[0]).value, $(ui.inputs[1]).value, $(ui.wood).checked, true);
+  for (const el of [...ui.inputs, ui.wood]) $(el).addEventListener('input', changed);
+  const saved = colourPrefs[kind], valid = Array.isArray(saved) && /^#[0-9a-f]{6}$/i.test(saved[0]) && /^#[0-9a-f]{6}$/i.test(saved[1]);
+  const [, a, b] = THEMES[kind][0];
+  setColours(kind, valid ? saved[0] : a, valid ? saved[1] : b, valid && saved[2] === true, false);
+}
+const tableSel = $('#tableSel'), themeMeta = document.querySelector('meta[name="theme-color"]');
+themeMeta.dataset.plain = themeMeta.content;
+for (const [key, t] of Object.entries(TABLES)) tableSel.add(new Option(t.name, key));
+tableSel.onchange = () => {
+  setTable(tableSel.value);
+  try { localStorage.setItem('shadowboard.table', tableSel.value); } catch (e) {}
+};
+try { const k = localStorage.getItem('shadowboard.table'); if (TABLES[k]) tableSel.value = k; } catch (e) {}
+setTable(tableSel.value);
+$('#copyBtn').onclick = async () => {
+  try { await navigator.clipboard.writeText(S.fen); hint('FEN copied.'); } catch (e) { hint(S.fen); }
+};
+const menu = $('#menu'), moreBtn = $('#moreBtn'), menuBackdrop = $('#menuBackdrop');
+function closeMenu(){ menu.hidden = menuBackdrop.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); }
+function openMenu(){
+  // as a popover it opens upwards from the card, so it may only be as tall as the room above it
+  menu.style.maxHeight = matchMedia('(max-width:700px), (max-height:500px)').matches ? '' : Math.max(240, $('#tools').getBoundingClientRect().top - 16) + 'px';
+  menu.hidden = menuBackdrop.hidden = false; moreBtn.setAttribute('aria-expanded', 'true');
+}
+moreBtn.onclick = e => { e.stopPropagation(); menu.hidden ? openMenu() : closeMenu(); };
+$('#menuClose').onclick = closeMenu;
+document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape'){ closeMenu(); if (S.fixing) endFix(); } });
+menu.addEventListener('click', e => { if (e.target.closest('button')) setTimeout(closeMenu, 0); });
+
+/* pinch to zoom the 3D board on touch screens */
+const touches = new Map();
+let pinch0 = null;
+cv.addEventListener('pointerdown', e => { touches.set(e.pointerId, e); if (touches.size === 2){ drag = null; const [a, b] = [...touches.values()]; pinch0 = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), z: orbit.zoom }; } });
+cv.addEventListener('pointermove', e => {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, e);
+  if (pinch0 && touches.size === 2){
+    drag = null;
+    const [a, b] = [...touches.values()];
+    const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    orbit.zoom = orbit.zoomTarget = Math.min(1.7, Math.max(0.55, pinch0.z * pinch0.d / Math.max(d, 1)));
+    showView(null); dirty = true;
+  }
+});
+const endTouch = e => { touches.delete(e.pointerId); if (touches.size < 2) pinch0 = null; };
+cv.addEventListener('pointerup', endTouch); cv.addEventListener('pointercancel', endTouch);
+
+/* recording: the whole page (3D board, video and all) from the start of the video to its end, saved
+   as a file. Browsers with screen capture record this tab, with its sound if the viewer ticks it;
+   phones, which have none, record just the 3D board. A shared tab has no start or end here, so
+   that is recorded until the viewer stops it. */
+const REC = { recorder: null, stream: null, chunks: [], t0: 0, timer: 0, type: '', tip: $('#recBtn').dataset.tip };
+function recType(){
+  for (const t of ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'])
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
+  return '';
+}
+function playFromStart(){
+  if (S.source === 'youtube' && S.playerReady){ S.player.seekTo(0, true); S.player.playVideo(); }
+  else if (S.source === 'upload'){ video.currentTime = 0; video.play().catch(() => {}); }
+}
+async function startRecording(){
+  if (REC.recorder) return;
+  if (!S.source || (S.source === 'youtube' && !S.playerReady)) return hint('Open a video first, then record.', true);
+  if (!window.MediaRecorder) return hint('This browser can’t record.', true);
+  let stream;
+  try {
+    if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia){
+      pausePlayer();
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser', frameRate: 30, cursor: 'never' }, audio: true,
+        preferCurrentTab: true, selfBrowserSurface: 'include', surfaceSwitching: 'exclude',
+      });
+    } else stream = renderer.domElement.captureStream(30);
+  } catch (e) { return hint('Recording cancelled.'); }
+  const type = recType();
+  let rec;
+  try { rec = new MediaRecorder(stream, { ...(type && { mimeType: type }), videoBitsPerSecond: 8e6 }); }
+  catch (e) { stream.getTracks().forEach(t => t.stop()); return hint('This browser can’t record.', true); }
+  Object.assign(REC, { recorder: rec, stream, chunks: [], type: rec.mimeType || type || 'video/webm',
+    name: S.videoId || (S.file && S.file.name.replace(/\.[^.]+$/, '')) || (S.source === 'screen' ? 'live' : 'video') });
+  rec.ondataavailable = e => { if (e.data && e.data.size) REC.chunks.push(e.data); };
+  rec.onstop = saveRecording;
+  // stopping the share from the browser's own bar ends the recording too
+  for (const t of stream.getVideoTracks()) t.addEventListener('ended', stopRecording);
+  $('#recBtn').setAttribute('aria-pressed', 'true');
+  $('#recBtn').dataset.tip = 'Stop recording';
+  rec.start(1000);
+  REC.t0 = performance.now();
+  const until = S.source === 'screen' ? 'Press record again to stop.' : 'It stops at the end of the video.';
+  REC.timer = setInterval(() => hint(`Recording ${mmss((performance.now() - REC.t0) / 1000)}. ${until}`), 1000);
+  hint('Recording…');
+  playFromStart();
+}
+function stopRecording(){
+  const rec = REC.recorder;
+  if (!rec) return;
+  REC.recorder = null;
+  clearInterval(REC.timer);
+  if (rec.state !== 'inactive') rec.stop();
+  REC.stream.getTracks().forEach(t => t.stop());
+  $('#recBtn').setAttribute('aria-pressed', 'false');
+  $('#recBtn').dataset.tip = REC.tip;
+}
+function saveRecording(){
+  if (!REC.chunks.length) return hint('Nothing was recorded.', true);
+  const blob = new Blob(REC.chunks, { type: REC.type.split(';')[0] });
+  REC.chunks = [];
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `watchchess3d-${REC.name}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${blob.type === 'video/mp4' ? 'mp4' : 'webm'}`;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  hint(`Recording saved (${(blob.size / 1048576).toFixed(1)} MB).`);
+}
+$('#recBtn').onclick = () => REC.recorder ? stopRecording() : startRecording();
+video.addEventListener('ended', () => { if (S.source === 'upload') stopRecording(); });
+
+/* the moves of the game on show, for the scoresheets: back to the last game start (or a position
+   the reader jumped to), with takebacks taken off. [{n, w, b}] */
+const START_PLACEMENT = START_FEN.split(' ')[0];
+function gameMoves(){
+  let line = [];
+  for (let i = 0; i <= S.idx && i < S.events.length; i++){
+    const e = S.events[i], place = e.fen.split(' ')[0];
+    if (e.san) line.push({ san: e.san, fen: e.fen });
+    else if (e.jump || place === START_PLACEMENT) line = [];
+    else while (line.length && line[line.length - 1].fen.split(' ')[0] !== place) line.pop();
+  }
+  const rows = [];
+  for (const { san, fen } of line){
+    const [, turn, , , , full] = fen.split(' ');
+    const n = turn === 'b' ? +full : +full - 1, white = turn === 'b';
+    let row = rows[rows.length - 1];
+    if (!row || row.n !== n || white || row.b){ row = { n }; rows.push(row); }
+    if (white) row.w = san; else { if (!row.w && rows.length === 1) row.w = '\u2026'; row.b = san; }
+  }
+  return rows;
+}
+function updateSheets(){ if (sheets.length) writeSheets(gameMoves()); }
+// the scoresheets are written by hand: redraw them once the handwriting font is in
+Promise.all(['500 40px Caveat', '600 30px "Instrument Sans"'].map(f => document.fonts.load(f))).then(() => { sheetKey = null; updateSheets(); }).catch(() => {});
+/* the clock runs for the side to move while the video plays */
+setInterval(() => {
+  if (!clock.tex) return;
+  const t = playerTime();
+  if (S.source && clock.lastT != null && t > clock.lastT && t - clock.lastT < 2){
+    const turn = S.fen.split(' ')[1];
+    clock.time[turn] = Math.max(0, clock.time[turn] - (t - clock.lastT));
+  }
+  clock.lastT = t;
+  drawClock();
+}, 250);
+try { if (localStorage.getItem('shadowboard.sway') === '1') setSway(true); } catch (e) {}
+
+sync3D(fenToBoard(START_FEN), false);
+resize3D();
+requestAnimationFrame(loop);
+updateButtons();
+if (!location.hash.includes('v=')) showSeries();
+resume();
+window.__sb = { S, playerTime };

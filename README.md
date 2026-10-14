@@ -1,9 +1,18 @@
-# Watch Chess in 3D (server version)
+# Watch Chess in 3D
 
-Paste a YouTube link (or open a video file) and watch it with a 3D board that follows the game.
-Works on phones: no screen sharing. The server only downloads the video; your browser reads the
-board about 3 times a second and builds a timeline of positions, so pausing and seeking just work.
-Arrows and circles the streamer draws show up on the 3D board too.
+Watch a chess video with a 3D board that follows the game. Play the video in another tab and share
+that tab with the page: your browser reads the board about 3 times a second as it plays, on your
+own device, and the 3D board keeps up. Nothing is downloaded or uploaded, so it works with YouTube
+(or any site) without a server fetching videos. Arrows and circles the streamer draws show up on
+the 3D board too. You can also open a video file.
+
+There are two pages:
+
+- `/`: share a tab (or open a file). Needs only static files, so it can be hosted anywhere.
+  Screen sharing needs a desktop browser (Chrome and Edge share a single tab, Firefox and Safari a
+  window); phones can only open files.
+- `/server`: paste a YouTube link and the server downloads it, so the reading builds a timeline
+  you can pause and seek through, and works on phones. Needs `app.py` running (see below).
 
 <img width="1000" height="514" alt="image" src="https://github.com/user-attachments/assets/c7592d26-c61b-4a7f-a311-ae325a0e1928" />
 
@@ -19,15 +28,21 @@ Without Docker (needs Python 3.10+ and ffmpeg):
     pip install -r requirements.txt
     uvicorn app:app --host 0.0.0.0 --port 8080
 
-Then open http://localhost:8080, or http://<your computer's IP>:8080 from a phone on the same
-Wi-Fi. To use it away from home, put it behind HTTPS on a small VPS or a tunnel (Cloudflare
+Then open http://localhost:8080 (or http://localhost:8080/server to paste YouTube links), or
+http://<your computer's IP>:8080 from a phone on the same Wi-Fi. To use it away from home, put it behind HTTPS on a small VPS or a tunnel (Cloudflare
 Tunnel, Tailscale Funnel, ngrok).
+
+For `/` alone, any static file server will do, e.g. `python -m http.server -d static 8080`.
+Screen sharing needs HTTPS (or localhost).
 
 ## How it works
 
-The server does no video work: it fetches YouTube videos with yt-dlp, repackages them as plain
-MP4 (no re-encoding) and serves them to the browser, which does all the reading. Video files you
-open never leave your device.
+All the reading happens in the browser. On `/`, the shared tab is shown in the video card and
+read as it plays (`readScreen` in `static/read.js`): the board is found, then read about 3 times a
+second. Each reading is checked against the board it was found on, so when the board goes away
+(an ad, another video, the page scrolled or resized) frames are skipped and the board is looked
+for again. On `/server`, the server fetches YouTube videos with yt-dlp, repackages them as plain
+MP4 (no re-encoding) and serves them to the browser. Video files you open never leave your device.
 
 - `app.py`: FastAPI. Runs downloads in the background and keeps finished readings, so the next
   person to open the same video gets it instantly. Also serves the episode lists on the start card.
@@ -41,11 +56,13 @@ open never leave your device.
 - Which way up: chess.com and Lichess put the player's colour at the bottom, so this is settled
   per game from the starting position, and the reader also notices when the board is flipped
   mid-video. The 3D board turns to match.
-- `static/index.html`: the page, with the 3D board (three.js) and YouTube's embedded player.
+- `static/index.html` (`/`) and `static/server.html` (`/server`): the two pages, sharing
+  `static/app.js` (the 3D board with three.js, the video card, settings) and `static/style.css`.
   Board, piece and table finishes, camera views and auto-rotate are under Settings and the camera bar.
-  The record button (last in the camera bar) records the whole page from the start of the video to
-  its end and saves it as an MP4 or WebM; tick "Also share tab audio" for the sound. Phones can't
-  capture the screen, so there it records the 3D board only.
+  The record button (last in the camera bar) records the whole page and saves it as an MP4 or WebM:
+  on `/server` from the start of the video to its end (tick "Also share tab audio" for the sound;
+  phones can't capture the screen, so there it records the 3D board only), on `/` until you press it
+  again.
 - `tools/make_pieces.py`, `tools/make_props.py`: build `static/pieces.glb` and `static/props.glb`
   from the Poly Haven models listed under Credits.
 
@@ -67,7 +84,7 @@ list (refresh it with `python app.py series`).
 
 ## Things to know
 
-- **YouTube's terms of service don't allow downloading videos** outside YouTube's own apps.
+- **YouTube's terms of service don't allow downloading videos** (this is about `/server`; `/` downloads nothing) outside YouTube's own apps.
   Running this for yourself is a personal-use gray area; don't run it as a public service.
   Opening your own recordings avoids the issue.
 - **YouTube often blocks downloads from cloud servers** ("Sign in to confirm you're not a bot").
@@ -75,6 +92,9 @@ list (refresh it with `python app.py series`).
   a cookies.txt, set `YTDLP_COOKIES`, and keep yt-dlp up to date. Never commit that file.
 - Only flat 2D digital boards are recognized (Lichess/chess.com style), not filmed physical boards.
 - If the board isn't found, open Settings (the gear above the video) › **Draw the board area yourself**.
+- On `/`, keep the page in front while you watch: browsers slow down background tabs, so the
+  reading slows while you are in the video's tab (to pause or skip, say). Chrome and Edge keep this
+  page in front when you share.
 - Faint arrows can be missed; turn arrows off under Settings › Show arrows from the video.
 - The page loads TensorFlow.js and three.js from CDNs (jsDelivr, cdnjs).
 - Downloaded videos stay in the data folder until you delete them.

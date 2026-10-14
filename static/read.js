@@ -1,8 +1,10 @@
 /* Reads a video in the browser. An MP4 (every video the server downloads, most files) is
    decoded and read entirely in the worker with WebCodecs. Anything else, or a browser
    without WebCodecs, falls back to stepping a hidden <video> through the video ~3 times a
-   second here and posting each board crop to the worker. */
+   second here and posting each board crop to the worker. A shared tab is read as it plays
+   (readScreen). */
 import { readSource } from './pipeline.js';
+import { FPS } from './engine.js';
 
 let worker = null, seq = 0;
 const waiting = new Map();
@@ -107,6 +109,7 @@ const remote = {
   orient: crops => call('orient', { crops }, crops.map(c => c.data.buffer)),
   start: (whiteBottom, decided, fixed) => call('start', { whiteBottom, decided, fixed }),
   frame: (t, img) => send('frame', img, { t }),
+  live: (t, img, minGap) => send('live', img, { t, minGap }),
 };
 
 class Cancelled extends Error {}
@@ -137,4 +140,78 @@ export function readVideo(src, { file = null, region = null, orientation = 'auto
     stopped = true;
     if (run && worker) worker.postMessage({ op: 'cancel', run: run.id });
   };
+}
+
+/* ---------------------------------------------------------------- a shared tab, as it plays */
+const LIVE_LINES = 360;  // a shared tab is searched for the board shrunk to this many lines
+const sleep = ms => new Promise(res => setTimeout(res, ms));
+let small = null, sctx = null;
+/* the current frame shrunk so its shorter side is about `lines` pixels; k: the scale */
+function grabSmall(v, lines){
+  const k = Math.min(1, lines / Math.min(v.videoWidth, v.videoHeight));
+  const w = Math.round(v.videoWidth * k), h = Math.round(v.videoHeight * k);
+  if (!small){ small = document.createElement('canvas'); sctx = small.getContext('2d', { willReadFrequently: true }); }
+  if (small.width !== w || small.height !== h){ small.width = w; small.height = h; }
+  sctx.imageSmoothingQuality = 'high';
+  sctx.drawImage(v, 0, 0, w, h);
+  return { w, h, k, data: sctx.getImageData(0, 0, w, h).data };
+}
+const close = (a, b) => [0, 1, 2, 3].every(i => Math.abs(a[i] - b[i]) < 0.04 * a[2]);
+
+/* Reads a tab (or window, or screen) being shared, as it plays: v is a playing <video> showing
+   it. Finds the board, then reads it FPS times a second, with t in seconds since the reading
+   began. Each board crop is checked against the board it was found on first: while it doesn't
+   look like it (an ad, a change of video, the page scrolled), frames are skipped, and after a
+   second of that the board is looked for again; so it is when the shared tab changes size.
+   region, orientation and on(update) as for readVideo, with status 'live' while reading and
+   {lost: true} when the board is being looked for again. A region drawn by hand is kept until
+   the shared tab changes size. Returns a function that stops it. */
+export function readScreen(v, { region = null, orientation = 'auto', on }){
+  let stopped = false;
+  const live = () => { if (stopped) throw new Cancelled(); };
+  const report = u => { if (!stopped) on(u); };
+  const t0 = performance.now();
+  (async () => {
+    report({ status: 'loading' });
+    await remote.start(orientation !== 'b', orientation !== 'auto', orientation !== 'auto'); live();
+    let manual = !!region, size = '', crop = null, minGap = 0, misses = 0, prev = null, status = 'loading';
+    const say = s => { if (s !== status) report({ status: (status = s) }); };
+    const lose = () => { region = crop = prev = null; manual = false; report({ lost: true }); };
+    for (;;){
+      const tick = performance.now(), W = v.videoWidth, H = v.videoHeight;
+      if (!W || !H || v.readyState < 2){ await sleep(250); live(); continue; }
+      if (W + 'x' + H !== size){
+        if (size && region) lose();
+        size = W + 'x' + H;
+      }
+      if (!region){
+        say('finding_board');
+        const img = grabSmall(v, LIVE_LINES), k = img.k;
+        const r = await remote.search(img); live();
+        const box = r.box.map(x => x / k), found = r.score > 12 && box[2] > 0;
+        // the same board twice running, so a passing frame can't set it
+        if (!(found && prev && close(prev, box))){
+          prev = found ? box : null;
+          await sleep(400); live();
+          continue;
+        }
+        region = await remote.refine(grab(v), box); live();
+      }
+      if (!crop){
+        const x = Math.max(0, Math.round(region[0])), y = Math.max(0, Math.round(region[1]));
+        crop = [x, y, Math.max(8, Math.min(W - x, Math.round(region[2]))), Math.max(8, Math.min(H - y, Math.round(region[3])))];
+        minGap = 0; misses = 0;
+        report({ region, width: W, height: H, duration: 0 });
+        say('live');
+      }
+      const r = await remote.live((performance.now() - t0) / 1000, grab(v, crop), minGap); live();
+      if (!minGap) minGap = Math.max(4, 0.45 * r.gap);
+      if (r.events){
+        misses = 0;
+        report({ events: r.events, marks: r.marks, whiteBottom: r.decided ? r.whiteBottom : null });
+      } else if (++misses >= FPS && !manual){ lose(); continue; }
+      await sleep(Math.max(0, 1000 / FPS - (performance.now() - tick))); live();
+    }
+  })().catch(e => { if (!stopped && !(e instanceof Cancelled)) report({ status: 'error', error: e.message }); });
+  return () => { stopped = true; };
 }

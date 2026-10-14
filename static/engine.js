@@ -165,6 +165,23 @@ export function refine(px, W, H, ch, r){
   return r;
 }
 
+/* How plainly a 256x256 board crop shows the board it was found on: the mean grey gap between
+   light and dark squares, read near each cell's corners, where pieces seldom reach. It falls
+   when the board has gone, or has moved by more than a sliver of a square. */
+export function boardGap(img){
+  let s = 0;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++){
+    let m = 0;
+    for (const y0 of [4, 24]) for (const x0 of [4, 24])
+      for (let y = y0; y < y0 + 4; y++) for (let x = x0; x < x0 + 4; x++){
+        const o = ((r * 32 + y) * 256 + c * 32 + x) * 3;
+        m += grey(img[o], img[o + 1], img[o + 2]);
+      }
+    s += ((r + c) & 1 ? -1 : 1) * m / 64;
+  }
+  return Math.abs(s) / 64;
+}
+
 /* found: [{score, box, t}] from frames spread through the video. Boxes that agree with
    many others win; returns the winner (to be refined on its frame) or null. */
 export function pickBoard(found){
