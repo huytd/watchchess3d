@@ -282,36 +282,25 @@ function makeSheet(){
   return g;
 }
 
-/* a digital chess clock: a wedge with the two times on its sloping face and a rocker on top,
-   down on the side of whoever just moved. The times run down for the side to move while the
-   video plays. */
-const CONTROLS = [[180, 2], [300, 0], [300, 3], [600, 0], [600, 5], [900, 10]];
-const clock = { mesh: null, tex: null, rockers: [], time: { w: 0, b: 0 }, inc: 0, lastT: null, shown: '', leftColour: 'w', side: 1 };
-{
-  const [base, inc] = pick(CONTROLS);
-  clock.inc = inc;
-  // a game already under way
-  clock.time.w = Math.round(base * rand(0.35, 0.95)); clock.time.b = Math.round(base * rand(0.35, 0.95));
-}
-const clockFmt = s => { s = Math.max(0, Math.ceil(s)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+/* a digital chess clock: a wedge with a display on its sloping face and a rocker on top, down
+   on the side of whoever just moved. The video's clock times aren't read, so the display shows
+   no times, only which side is to move. */
+const clock = { tex: null, rockers: [], shown: '', leftColour: 'w', side: 1 };
 function drawClock(){
   if (!clock.tex) return;
-  const left = clock.leftColour, right = left === 'w' ? 'b' : 'w';
-  const txt = clockFmt(clock.time[left]) + '|' + clockFmt(clock.time[right]);
-  if (txt === clock.shown) return;
-  clock.shown = txt;
+  const left = clock.leftColour;
+  const turn = (S.fen || START_FEN).split(' ')[1];
+  const key = left + turn;
+  if (key === clock.shown) return;
+  clock.shown = key;
   const c = clock.tex.image, g = c.getContext('2d'), w = c.width, h = c.height;
   g.fillStyle = '#121416'; g.fillRect(0, 0, w, h);
   const pad = h * 0.14;
   g.fillStyle = '#9fae95'; g.fillRect(pad, pad, w - 2 * pad, h - 2 * pad);
   g.fillStyle = 'rgba(0,0,0,0.06)'; g.fillRect(pad, h - pad - h * 0.12, w - 2 * pad, h * 0.12);
-  g.fillStyle = '#1d241b'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = `600 ${h * 0.42}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
-  const [a, b] = txt.split('|');
-  g.fillText(a, w * 0.27, h * 0.53); g.fillText(b, w * 0.73, h * 0.53);
+  g.fillStyle = '#1d241b';
   g.fillRect(w / 2 - 1.5, pad + h * 0.12, 3, h - 2 * pad - h * 0.24);
   // the dot by the side to move
-  const turn = (S.fen || START_FEN).split(' ')[1];
   g.beginPath(); g.arc(turn === left ? w * 0.09 : w * 0.91, h * 0.3, h * 0.04, 0, Math.PI * 2); g.fill();
   clock.tex.needsUpdate = true;
   dirty = true;
@@ -361,12 +350,12 @@ function layOutTable(models){
   const get = name => { const o = models.getObjectByName(name); return o ? o.clone() : null; };
   const footprint = obj => { const b = new THREE.Box3().setFromObject(obj), s = b.getSize(new THREE.Vector3()); return Math.hypot(s.x, s.z) / 2; };
   const scaled = name => { const o = get(name); if (o) o.scale.setScalar(PROP_SCALE); return o; };
-  // the clock, at one side of the board, its face turned outwards and a little towards White,
-  // and along from the scoresheet on that side
+  // the clock, as at a tournament: beside the board halfway between the players, its length
+  // along the board's edge so each player has a button on their side, and its face to the board
   clock.side = Math.random() < 0.6 ? -1 : 1;  // more often on the a-file side, which is the emptier side on wide screens
   const ck = makeClock();
-  const yaw = rand(0.25, 0.55);
-  putDown(ck, clock.side * rand(6.4, 6.9), -clock.side * rand(0.5, 1.1), clock.side < 0 ? yaw - Math.PI / 2 : Math.PI / 2 - yaw, 1.8);
+  // the face looks along the clock's local +z, which turns to world -x * side
+  putDown(ck, clock.side * rand(5.6, 5.8), rand(-0.2, 0.2), -clock.side * Math.PI / 2 + rand(-0.05, 0.05), 1.8);
   // which colour's button is on the clock's left (its local -x)
   ck.updateMatrixWorld(true);
   const lp = new THREE.Vector3(-1, 0, 0).applyMatrix4(ck.matrixWorld);
@@ -376,7 +365,7 @@ function layOutTable(models){
   for (const c of ['w', 'b']){
     const turn = c === 'w' ? 0 : Math.PI;
     const sheet = makeSheet();
-    const [sx, sz] = side(c, rand(6.1, 6.6), rand(3.6, 4.2));
+    const [sx, sz] = side(c, rand(6.1, 6.6), rand(3.8, 4.3));  // clear of the clock
     putDown(sheet, sx, sz, turn + rand(-0.25, 0.1), 2.0);
     const penName = pick(['pen_blue', 'pen_blue', 'pen_fancy', 'pen_red', 'pencil']);
     const pen = scaled(penName);
@@ -1217,8 +1206,7 @@ setInterval(() => {
     S.fen = ev ? ev.fen : START_FEN;
     sync3D(fenToBoard(S.fen), step);
     highlight(ev);
-    // the clock: an increment for whoever just moved, and the rocker down on their side
-    if (step && ev && ev.san){ const moved = ev.fen.split(' ')[1] === 'w' ? 'b' : 'w'; clock.time[moved] += clock.inc; }
+    // the clock: the rocker down on the side that just moved
     setRockers(); drawClock();
     updateSheets();
     $('#lichessBtn').href = 'https://lichess.org/analysis/standard/' + S.fen.replace(/ /g, '_');
@@ -1508,17 +1496,6 @@ function gameMoves(){
 function updateSheets(){ if (sheets.length) writeSheets(gameMoves()); }
 // the scoresheets are written by hand: redraw them once the handwriting font is in
 Promise.all(['500 40px Caveat', '600 30px "Instrument Sans"'].map(f => document.fonts.load(f))).then(() => { sheetKey = null; updateSheets(); }).catch(() => {});
-/* the clock runs for the side to move while the video plays */
-setInterval(() => {
-  if (!clock.tex) return;
-  const t = playerTime();
-  if (S.source && clock.lastT != null && t > clock.lastT && t - clock.lastT < 2){
-    const turn = S.fen.split(' ')[1];
-    clock.time[turn] = Math.max(0, clock.time[turn] - (t - clock.lastT));
-  }
-  clock.lastT = t;
-  drawClock();
-}, 250);
 try { if (localStorage.getItem('shadowboard.sway') === '1') setSway(true); } catch (e) {}
 
 sync3D(fenToBoard(START_FEN), false);
