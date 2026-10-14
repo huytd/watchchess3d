@@ -74,10 +74,6 @@ MP4 (no re-encoding) and serves them to the browser. Video files you open never 
 - `static/index.html` (`/`) and `static/server.html` (`/server`): the two pages, sharing
   `static/app.js` (the 3D board with three.js, the video card, settings) and `static/style.css`.
   Board, piece and table finishes, camera views and auto-rotate are under Settings and the camera bar.
-  The record button (last in the camera bar) records the whole page and saves it as an MP4 or WebM:
-  on `/server` from the start of the video to its end (tick "Also share tab audio" for the sound;
-  phones can't capture the screen, so there it records the 3D board only), on `/` until you press it
-  again.
 - `tools/make_pieces.py`, `tools/make_props.py`: build `static/pieces.glb` and `static/props.glb`
   from the Poly Haven models listed under Credits.
 

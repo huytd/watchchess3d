@@ -893,7 +893,7 @@ async function showYouTube(id){
   S.player = new YT.Player('yt', {
     videoId: id, width: '100%', height: '100%',
     playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
-    events: { onReady: () => { S.playerReady = true; layoutPlayer(); }, onStateChange: e => { if (e.data === YT.PlayerState.ENDED) stopRecording(); } },
+    events: { onReady: () => { S.playerReady = true; layoutPlayer(); } },
   });
 }
 
@@ -904,7 +904,6 @@ function clearReading(){
   Object.assign(S, { events: [], idx: -2, marks: [], markIdx: -2, whiteBottom: null, viewWb: null, progress: 0, saved: false });
 }
 function resetAll(){
-  stopRecording();
   clearTimeout(S.pollTimer);
   clearReading();
   if (S.source === 'upload' && S.src) URL.revokeObjectURL(S.src);
@@ -1484,77 +1483,6 @@ cv.addEventListener('pointermove', e => {
 });
 const endTouch = e => { touches.delete(e.pointerId); if (touches.size < 2) pinch0 = null; };
 cv.addEventListener('pointerup', endTouch); cv.addEventListener('pointercancel', endTouch);
-
-/* recording: the whole page (3D board, video and all) from the start of the video to its end, saved
-   as a file. Browsers with screen capture record this tab, with its sound if the viewer ticks it;
-   phones, which have none, record just the 3D board. A shared tab has no start or end here, so
-   that is recorded until the viewer stops it. */
-const REC = { recorder: null, stream: null, chunks: [], t0: 0, timer: 0, type: '', tip: $('#recBtn').dataset.tip };
-function recType(){
-  for (const t of ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'])
-    if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
-  return '';
-}
-function playFromStart(){
-  if (S.source === 'youtube' && S.playerReady){ S.player.seekTo(0, true); S.player.playVideo(); }
-  else if (S.source === 'upload'){ video.currentTime = 0; video.play().catch(() => {}); }
-}
-async function startRecording(){
-  if (REC.recorder) return;
-  if (!S.source || (S.source === 'youtube' && !S.playerReady)) return hint('Open a video first, then record.', true);
-  if (!window.MediaRecorder) return hint('This browser can’t record.', true);
-  let stream;
-  try {
-    if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia){
-      pausePlayer();
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: 'browser', frameRate: 30, cursor: 'never' }, audio: true,
-        preferCurrentTab: true, selfBrowserSurface: 'include', surfaceSwitching: 'exclude',
-      });
-    } else stream = renderer.domElement.captureStream(30);
-  } catch (e) { return hint('Recording cancelled.'); }
-  const type = recType();
-  let rec;
-  try { rec = new MediaRecorder(stream, { ...(type && { mimeType: type }), videoBitsPerSecond: 8e6 }); }
-  catch (e) { stream.getTracks().forEach(t => t.stop()); return hint('This browser can’t record.', true); }
-  Object.assign(REC, { recorder: rec, stream, chunks: [], type: rec.mimeType || type || 'video/webm',
-    name: S.videoId || (S.file && S.file.name.replace(/\.[^.]+$/, '')) || (S.source === 'screen' ? 'live' : 'video') });
-  rec.ondataavailable = e => { if (e.data && e.data.size) REC.chunks.push(e.data); };
-  rec.onstop = saveRecording;
-  // stopping the share from the browser's own bar ends the recording too
-  for (const t of stream.getVideoTracks()) t.addEventListener('ended', stopRecording);
-  $('#recBtn').setAttribute('aria-pressed', 'true');
-  $('#recBtn').dataset.tip = 'Stop recording';
-  rec.start(1000);
-  REC.t0 = performance.now();
-  const until = S.source === 'screen' ? 'Press record again to stop.' : 'It stops at the end of the video.';
-  REC.timer = setInterval(() => hint(`Recording ${mmss((performance.now() - REC.t0) / 1000)}. ${until}`), 1000);
-  hint('Recording…');
-  playFromStart();
-}
-function stopRecording(){
-  const rec = REC.recorder;
-  if (!rec) return;
-  REC.recorder = null;
-  clearInterval(REC.timer);
-  if (rec.state !== 'inactive') rec.stop();
-  REC.stream.getTracks().forEach(t => t.stop());
-  $('#recBtn').setAttribute('aria-pressed', 'false');
-  $('#recBtn').dataset.tip = REC.tip;
-}
-function saveRecording(){
-  if (!REC.chunks.length) return hint('Nothing was recorded.', true);
-  const blob = new Blob(REC.chunks, { type: REC.type.split(';')[0] });
-  REC.chunks = [];
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `watchchess3d-${REC.name}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${blob.type === 'video/mp4' ? 'mp4' : 'webm'}`;
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-  hint(`Recording saved (${(blob.size / 1048576).toFixed(1)} MB).`);
-}
-$('#recBtn').onclick = () => REC.recorder ? stopRecording() : startRecording();
-video.addEventListener('ended', () => { if (S.source === 'upload') stopRecording(); });
 
 /* the moves of the game on show, for the scoresheets: back to the last game start (or a position
    the reader jumped to), with takebacks taken off. [{n, w, b}] */
