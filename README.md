@@ -43,6 +43,9 @@ open never leave your device.
   mid-video. The 3D board turns to match.
 - `static/index.html`: the page, with the 3D board (three.js) and YouTube's embedded player.
   Board, piece and table finishes, camera views and auto-rotate are under Settings and the camera bar.
+  The record button (last in the camera bar) records the whole page from the start of the video to
+  its end and saves it as an MP4 or WebM; tick "Also share tab audio" for the sound. Phones can't
+  capture the screen, so there it records the 3D board only.
 - `tools/make_pieces.py`, `tools/make_props.py`: build `static/pieces.glb` and `static/props.glb`
   from the Poly Haven models listed under Credits.
 
