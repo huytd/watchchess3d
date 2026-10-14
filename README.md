@@ -15,6 +15,8 @@ There are two pages:
 - `/server`: paste a YouTube link and the server downloads it, so the reading builds a timeline
   you can pause and seek through, and works on phones. Needs `app.py` running (see below).
 
+<img width="1000" height="514" alt="image" src="https://github.com/user-attachments/assets/8dfd5842-7f60-4cdc-8f39-178e4dd2a3b3" />
+
 <img width="1000" height="514" alt="image" src="https://github.com/user-attachments/assets/c7592d26-c61b-4a7f-a311-ae325a0e1928" />
 
 ## Run it
