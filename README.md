@@ -8,7 +8,8 @@ the 3D board too. You can also open a video file.
 
 There are two pages:
 
-- `/`: share a tab (or open a file). Needs only static files, so it can be hosted anywhere.
+- `/`: share a tab (or open a file). Needs only static files, so it can be hosted anywhere
+  (see [Deploy to Vercel](#deploy-to-vercel)).
   Screen sharing needs a desktop browser (Chrome and Edge share a single tab, Firefox and Safari a
   window); phones can only open files.
 - `/server`: paste a YouTube link and the server downloads it, so the reading builds a timeline
@@ -34,6 +35,20 @@ Tunnel, Tailscale Funnel, ngrok).
 
 For `/` alone, any static file server will do, e.g. `python -m http.server -d static 8080`.
 Screen sharing needs HTTPS (or localhost).
+
+## Deploy to Vercel
+
+`/` needs no server, so it can go on Vercel as plain static files:
+
+    ./deploy.sh              # production
+    ./deploy.sh --preview    # a preview at its own URL
+
+It needs Node.js. The first run asks you to log in to Vercel and to pick or create a project, and
+remembers the project in `.vercel/`. In CI, set `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
+`VERCEL_PROJECT_ID` instead. Importing the repository on vercel.com works too, with no settings to
+change. `vercel.json` publishes the `static` folder as it is (no build) and sends `/server` to
+`/`; `.vercelignore` leaves out `app.py`, the `/server` page and everything else only the server
+uses.
 
 ## How it works
 

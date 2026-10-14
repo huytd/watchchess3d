@@ -1,0 +1,14 @@
+# Vercel hosts only the page that reads a shared tab (static/index.html and what it loads).
+# The server and the page that needs it stay out.
+app.py
+requirements.txt
+Dockerfile
+.dockerignore
+tools/
+data/
+static/server.html
+static/series.json
+*.pyc
+__pycache__/
+cookies.txt
+.env

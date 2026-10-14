@@ -253,4 +253,3 @@ img,video,canvas{max-width:none}
 @media (min-width:701px){ .card.idle.intro{width:min(680px, calc(100vw - 40px))} }
 .empty .howto{display:block; width:100%; height:auto; border-radius:10px}
 .empty .row .or{margin-left:2px}
-.empty a{color:var(--accent)}

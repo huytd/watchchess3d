@@ -1391,8 +1391,6 @@ if (LIVE){
   const canShare = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
   $('#shareBtn').disabled = !canShare; $('#noShare').hidden = canShare;
   $('#shareBtn').onclick = startScreen;
-  // run with its server (app.py), this app can also fetch YouTube videos itself
-  fetch('api/series').then(r => { if (r.ok) $('#serverNote').hidden = false; }).catch(() => {});
 }
 $('#fileBtn').onclick = () => $('#fileInput').click();
 $('#fileInput').onchange = e => { const f = e.target.files && e.target.files[0]; if (f) startUpload(f); e.target.value = ''; };
