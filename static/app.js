@@ -445,8 +445,9 @@ const hl = hlMats.map(mat => { const m = new THREE.Mesh(new THREE.PlaneGeometry(
 const sqPos = i => new THREE.Vector3((i % 8) - 3.5, 0, 3.5 - Math.floor(i / 8));
 const sqIndex = name => (+name[1] - 1) * 8 + FILES.indexOf(name[0]);
 
-/* arrows, circles and coloured squares the streamer draws; arrows arc over the pieces and
-   draw on top of everything, so a piece never hides one */
+/* arrows, circles and coloured squares the streamer draws; arrows arc over the pieces, or lie
+   flat if you'd rather (a knight's then bends round the corner, as on chess.com), and draw on
+   top of everything, so a piece never hides one */
 const MARK_COLOURS = { green: 0x3fae49, red: 0xe0483e, blue: 0x3b82e0, orange: 0xf0a020 };
 const markMats = {};
 function markMat(colour, kind){
@@ -458,14 +459,16 @@ function markMat(colour, kind){
   });
   return markMats[k];
 }
+const ARROW_W = 0.085, HEAD_W = 0.3, HEAD_L = 0.45;  // half widths
 function arrowGeometry(from, to){
   const a = sqPos(sqIndex(from)), b = sqPos(sqIndex(to));
   a.y = b.y = 0.04;
+  if (S.straightArrows) return flatArrowGeometry(a, b);
   const top = a.clone().add(b).multiplyScalar(0.5);
   top.y = 2 * Math.min(0.75, 0.15 + 0.07 * a.distanceTo(b));  // a quadratic curve peaks at half its control point
   const curve = new THREE.QuadraticBezierCurve3(a, top, b);
   const side = new THREE.Vector3(b.z - a.z, 0, a.x - b.x).normalize();
-  const W = 0.085, HEAD_W = 0.3, HEAD_L = 0.45, N = 48;  // half widths
+  const W = ARROW_W, N = 48;
   const shaftEnd = 1 - HEAD_L / curve.getLength();
   const pos = [], idx = [];
   for (let i = 0; i <= N; i++){
@@ -481,7 +484,34 @@ function arrowGeometry(from, to){
   g.setIndex(idx);
   return g;
 }
+/* a flat arrow along the board: straight, or an L for a knight's move, the long leg first */
+function flatArrowGeometry(a, b){
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const pts = [a];
+  if (Math.abs(dx) * Math.abs(dz) === 2) pts.push(Math.abs(dx) > Math.abs(dz) ? new THREE.Vector3(b.x, a.y, a.z) : new THREE.Vector3(a.x, a.y, b.z));
+  // the shaft stops where the head starts
+  const last = pts[pts.length - 1], dir = b.clone().sub(last).normalize();
+  const h = b.clone().addScaledVector(dir, -HEAD_L);
+  pts.push(h);
+  const sideOf = (p, q) => new THREE.Vector3(q.z - p.z, 0, p.x - q.x).normalize();
+  const pos = [], idx = [];
+  pts.forEach((p, i) => {
+    // mitred at the bend, so the two legs meet without a gap or an overlap
+    const n1 = sideOf(pts[Math.max(0, i - 1)], pts[Math.max(1, i)]), n2 = sideOf(pts[Math.min(i, pts.length - 2)], pts[Math.min(i + 1, pts.length - 1)]);
+    const m = n1.clone().add(n2).normalize(), w = ARROW_W / m.dot(n1);
+    pos.push(p.x + m.x * w, p.y, p.z + m.z * w, p.x - m.x * w, p.y, p.z - m.z * w);
+    if (i) idx.push(2 * i - 2, 2 * i - 1, 2 * i, 2 * i - 1, 2 * i + 1, 2 * i);
+  });
+  const side = sideOf(h, b), k = pos.length / 3;
+  pos.push(h.x + side.x * HEAD_W, h.y, h.z + side.z * HEAD_W, h.x - side.x * HEAD_W, h.y, h.z - side.z * HEAD_W, b.x, b.y, b.z);
+  idx.push(k, k + 1, k + 2);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  return g;
+}
 const marksGroup = new THREE.Group(); scene.add(marksGroup);
+let shownMarks = null;
 const ringGeo = new THREE.RingGeometry(0.38, 0.46, 48), squareGeo = new THREE.PlaneGeometry(1, 1);
 function flatMark(geo, mat, sq, y){
   const m = new THREE.Mesh(geo, mat); m.rotation.x = -Math.PI / 2;
@@ -489,6 +519,7 @@ function flatMark(geo, mat, sq, y){
   marksGroup.add(m);
 }
 function drawMarks(m){
+  shownMarks = m;
   for (const o of marksGroup.children.slice()){
     if (o.geometry !== ringGeo && o.geometry !== squareGeo) o.geometry.dispose();
     marksGroup.remove(o);
@@ -836,7 +867,7 @@ function loop(now){
 /* ---------- app ---------- */
 const S = { source: null, videoId: null, src: null, events: [], status: null, error: null, region: null, manual: false,
   W: 0, H: 0, duration: 0, progress: 0, download: 0, cropped: false, idx: -2, fen: START_FEN, pollTimer: null, fixing: false,
-  whiteBottom: null, player: null, playerReady: false, marks: [], markIdx: -2, showMarks: true, stop: null, saved: false,
+  whiteBottom: null, player: null, playerReady: false, marks: [], markIdx: -2, showMarks: true, straightArrows: false, stop: null, saved: false,
   stream: null, t0: 0 };
 const stage = $('#stage'), card = $('#card'), video = $('#video'), still = $('#still');
 new ResizeObserver(resize3D).observe(card);
@@ -1391,6 +1422,13 @@ function setShowMarks(on){
 }
 $('#marksBtn').onclick = () => setShowMarks(!S.showMarks);
 try { if (localStorage.getItem('shadowboard.marks') === '0') setShowMarks(false); } catch (e) {}
+function setStraightArrows(on){
+  S.straightArrows = on; drawMarks(shownMarks);
+  $('#straightBtn').setAttribute('aria-pressed', on ? 'true' : 'false');
+  try { localStorage.setItem('shadowboard.straight', on ? '1' : '0'); } catch (e) {}
+}
+$('#straightBtn').onclick = () => setStraightArrows(!S.straightArrows);
+try { if (localStorage.getItem('shadowboard.straight') === '1') setStraightArrows(true); } catch (e) {}
 /* colours of the board and pieces, kept in this browser */
 const THEMES = {
   board: [['Green', '#d9cdae', '#56744f'], ['Brown', '#f0d9b5', '#b58863'], ['Blue', '#dee3e6', '#8ca2ad'],
