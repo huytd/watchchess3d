@@ -27,7 +27,7 @@
   <button class="cam" id="recBtn" aria-pressed="false" data-tip="Record this page" aria-label="Record this page"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg></button>
 </nav>
 
-<aside class="card idle" id="card" aria-label="Video">
+<aside class="card idle intro" id="card" aria-label="Video">
   <div class="tools" id="tools">
     <button class="tool" id="cropBtn" aria-pressed="false" hidden title="Show only the board" aria-label="Show only the board"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg></button>
     <p class="status" id="hint" role="status" aria-live="polite"></p>
@@ -38,11 +38,7 @@
     <canvas class="still" id="still" hidden></canvas>
     <canvas id="overlay"></canvas>
     <div class="empty" id="empty">
-      <p class="lead">Follow a chess video in 3D</p>
-      <ol class="steps">
-        <li>Open the video in another tab (YouTube or anywhere else) and play it.</li>
-        <li>Share that tab here. This device reads the board as it plays; nothing is uploaded.</li>
-      </ol>
+      <img class="howto" src="howto.webp" width="1440" height="806" alt="Follow a chess video in 3D. 1: open a chess video in another tab (on YouTube or anywhere else) and play it. 2: come back to this app and click Share a tab, then pick that tab. 3: follow along in 3D: this device reads the board as the video plays; nothing is uploaded.">
       <div class="row">
         <button class="btn primary" id="shareBtn" type="button">Share a tab</button>
         <span class="or">or <button class="btn" id="fileBtn" type="button">open a video file</button></span>
